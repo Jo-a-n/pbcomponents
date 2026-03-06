@@ -1,14 +1,21 @@
-import { writeFile } from 'fs/promises'
+import { writeFile, readFile } from 'fs/promises'
 import { join } from 'path'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
   try {
-    const styles = await request.json()
+    const newStyles = await request.json()
     
     const filePath = join(process.cwd(), 'components', 'frame.json')
     
-    await writeFile(filePath, JSON.stringify(styles, null, 2), 'utf-8')
+    // Read current styles
+    const currentStylesData = await readFile(filePath, 'utf-8')
+    const currentStyles = JSON.parse(currentStylesData)
+    
+    // Merge new styles with current styles
+    const updatedStyles = { ...currentStyles, ...newStyles }
+    
+    await writeFile(filePath, JSON.stringify(updatedStyles, null, 2), 'utf-8')
     
     return NextResponse.json({ success: true, message: 'Styles saved successfully' })
   } catch (error) {
