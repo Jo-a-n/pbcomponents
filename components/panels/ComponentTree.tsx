@@ -1,25 +1,16 @@
 'use client'
 import { useState } from 'react'
+import type { ComponentGroup } from '@/lib/component-selection/types'
 
 interface ComponentTreeProps {
   selectedComponent: string | null
   setSelectedComponent: (component: string | null) => void
   navigateDown?: (component: string) => void
+  components: ComponentGroup[]
 }
 
-export function ComponentTree({ selectedComponent, setSelectedComponent, navigateDown }: ComponentTreeProps) {
+export function ComponentTree({ selectedComponent, setSelectedComponent, navigateDown, components }: ComponentTreeProps) {
   const [expanded, setExpanded] = useState(true)
-
-  const components = [
-    {
-      name: 'Card',
-      children: ['CardHeader', 'CardTitle', 'CardDescription', 'CardAction', 'CardContent', 'CardFooter']
-    },
-    {
-      name: 'Frame',
-      children: ['FrameTitle', 'FrameAction']
-    }
-  ]
 
   return (
     <div className="fixed left-0 top-0 h-screen w-64 bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800 overflow-y-auto p-4 shadow-lg">

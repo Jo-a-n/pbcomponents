@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "generate:hierarchy": "node scripts/generate-component-hierarchy.mjs",
+    "dev": "npm run generate:hierarchy && next dev",
+    "build": "npm run generate:hierarchy && next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "npm run generate:hierarchy && eslint"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import pb from './frame.json'
+import pb from '../frame.json'
 
 type Styles = typeof pb
 
@@ -92,7 +92,7 @@ export function StyleEditor({ selectedComponent }: StyleEditorProps) {
             <textarea
               value={getValue(key)}
               onChange={(e) => handleChange(key, e.target.value)}
-              className="w-full h-24 p-2 border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 font-mono text-xs text-zinc-900 dark:text-zinc-100 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full h-24 p-2 border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 font-mono text-xs text-zinc-900 dark:text-zinc-100 resize-none focus:outline-none focus:ring-2 focus:ring-yellow-500"
               placeholder={Array.isArray(value) ? "Group items by editing in separate lines" : "Enter value"}
             />
           </div>
