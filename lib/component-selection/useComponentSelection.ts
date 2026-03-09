@@ -6,9 +6,17 @@ type UseComponentSelectionOptions = {
 }
 
 const componentNameToSlot = (name: string) => {
-  const generatedMatch = name.match(/^Div(\d{3})$/)
+  const generatedMatch = name.match(/^Div(\d{3})(.*)$/)
   if (generatedMatch) {
-    return `div-${generatedMatch[1]}`
+    const index = generatedMatch[1]
+    const suffix = generatedMatch[2] ?? ''
+    const normalizedSuffix = suffix
+      .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+      .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+      .replace(/^-/, '')
+      .toLowerCase()
+
+    return normalizedSuffix ? `div-${index}-${normalizedSuffix}` : `div-${index}`
   }
 
   return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
