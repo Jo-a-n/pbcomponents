@@ -142,12 +142,11 @@ export default async function LibraryPage() {
         {groups.map(({ group, preview }) => (
           <section
             key={group.name}
-            className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
           >
-            <h2 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+            <h2 className="mb-2 text-md italic text-zinc-500 dark:text-zinc-100">
               {group.name}
             </h2>
-            <div className="grid gap-4">{preview}</div>
+            <div className="border-t border-zinc-200 py-4 dark:border-zinc-800 grid gap-4">{preview}</div>
           </section>
         ))}
       </div>
