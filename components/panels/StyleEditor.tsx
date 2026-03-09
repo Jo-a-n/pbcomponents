@@ -1,17 +1,31 @@
 'use client'
 import { useState } from 'react'
 import pb from '../frame.json'
+import type { ComponentGroup } from '@/lib/component-selection/types'
 
 type Styles = typeof pb
 
 interface StyleEditorProps {
   selectedComponent: string | null
+  components: ComponentGroup[]
 }
 
-export function StyleEditor({ selectedComponent }: StyleEditorProps) {
+function getBreadcrumb(selectedComponent: string | null, components: ComponentGroup[]) {
+  if (!selectedComponent) return null
+
+  for (const group of components) {
+    if (group.name === selectedComponent) return [group.name]
+    if (group.children.includes(selectedComponent)) return [group.name, selectedComponent]
+  }
+
+  return [selectedComponent]
+}
+
+export function StyleEditor({ selectedComponent, components }: StyleEditorProps) {
   const [styles, setStyles] = useState<Styles>(pb)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState('')
+  const breadcrumb = getBreadcrumb(selectedComponent, components)
 
   const handleChange = (key: keyof Styles, value: string) => {
     // Check if original value was an array
@@ -73,6 +87,12 @@ export function StyleEditor({ selectedComponent }: StyleEditorProps) {
       <h2 className="text-xl font-bold mb-4 sticky top-0 bg-white dark:bg-zinc-900 py-2">
         Style Editor {selectedComponent && ` - ${selectedComponent}`}
       </h2>
+
+      {breadcrumb && (
+        <div className="mb-4 rounded-xl border border-zinc-100 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+          Editing: {breadcrumb.join(' / ')}
+        </div>
+      )}
       
       {!hasStyles && selectedComponent && (
         <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900 border border-yellow-300 dark:border-yellow-700 rounded">

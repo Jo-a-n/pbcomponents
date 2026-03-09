@@ -75,7 +75,7 @@ export default function Home() {
         </div>  
         
       </main>
-      <StyleEditor selectedComponent={selectedComponent} />
+      <StyleEditor selectedComponent={selectedComponent} components={componentHierarchy} />
     </div>
   );
 }
