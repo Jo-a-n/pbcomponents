@@ -28,6 +28,19 @@ export default function Home() {
     handleCanvasDoubleClickCapture,
   } = useComponentSelection({ componentHierarchy })
 
+  const handleCreateComponent = async () => {
+    const response = await fetch('/api/create-component', { method: 'POST' })
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data?.error ?? 'Failed to create component')
+    }
+
+    // Refresh so the updated generated hierarchy is re-imported.
+    window.location.reload()
+    return data.componentName as string
+  }
+
   return (
     <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <ComponentTree
@@ -35,6 +48,7 @@ export default function Home() {
         setSelectedComponent={setSelectedComponent}
         navigateDown={navigateDown}
         components={componentHierarchy}
+        onCreateComponent={handleCreateComponent}
       />
 
       <main className="flex-1 flex items-center justify-center py-32 px-16 ml-64">
