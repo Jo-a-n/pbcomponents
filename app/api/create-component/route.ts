@@ -82,6 +82,24 @@ function createComponentJsonTemplate(componentName: string) {
   )
 }
 
+function createComponentViewTemplate(componentName: string, fileName: string) {
+  const titleName = `${componentName}Title`
+  const actionName = `${componentName}Action`
+  const componentViewName = `${componentName}View`
+
+  return `import { ${componentName}, ${actionName}, ${titleName} } from "@/components/${fileName}"
+
+export function ${componentViewName}() {
+  return (
+    <${componentName}>
+      <${titleName}>${componentName} Title</${titleName}>
+      <${actionName}>${componentName} Action</${actionName}>
+    </${componentName}>
+  )
+}
+`
+}
+
 export async function POST() {
   try {
     const files = await readdir(COMPONENTS_DIR)
@@ -92,15 +110,17 @@ export async function POST() {
 
     const tsxPath = join(COMPONENTS_DIR, `${fileName}.tsx`)
     const jsonPath = join(COMPONENTS_DIR, `${fileName}.json`)
+    const viewPath = join(COMPONENTS_DIR, `${fileName}.view.tsx`)
 
     await writeFile(tsxPath, createComponentTsxTemplate(componentName, fileName), { encoding: 'utf8', flag: 'wx' })
     await writeFile(jsonPath, createComponentJsonTemplate(componentName), { encoding: 'utf8', flag: 'wx' })
+    await writeFile(viewPath, createComponentViewTemplate(componentName, fileName), { encoding: 'utf8', flag: 'wx' })
     await execFileAsync('node', [HIERARCHY_SCRIPT], { cwd: process.cwd() })
 
     return NextResponse.json({
       success: true,
       componentName,
-      files: [`${fileName}.tsx`, `${fileName}.json`],
+      files: [`${fileName}.tsx`, `${fileName}.json`, `${fileName}.view.tsx`],
     })
   } catch (error) {
     console.error('Error creating component files:', error)

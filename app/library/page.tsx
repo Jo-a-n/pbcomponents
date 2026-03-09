@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 type ComponentModule = Record<string, React.ComponentType<{ children?: React.ReactNode; className?: string }>>
+type ViewModule = Record<string, React.ComponentType>
 
 type ComponentGroup = {
   fileName: string
@@ -42,7 +43,12 @@ async function getComponentGroups() {
   const componentsDir = path.join(process.cwd(), 'components')
   const entries = await readdir(componentsDir, { withFileTypes: true })
   const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.tsx'))
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.endsWith('.tsx') &&
+        !entry.name.endsWith('.view.tsx')
+    )
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b))
 
@@ -77,6 +83,11 @@ async function loadComponentModule(fileName: string) {
   return componentModule
 }
 
+async function loadViewModule(fileName: string) {
+  const viewModule = (await import(`@/components/${fileName}.view.tsx`)) as ViewModule
+  return viewModule
+}
+
 function isComponent(value: unknown): value is React.ComponentType<{ children?: React.ReactNode; className?: string }> {
   return typeof value === 'function'
 }
@@ -101,8 +112,23 @@ export default async function LibraryPage() {
   const componentHierarchy = componentGroups.map(({ name, children }) => ({ name, children }))
   const groups = await Promise.all(
     componentGroups.map(async (group) => {
-      const componentModule = await loadComponentModule(group.fileName)
-      const preview = renderComponentGroup(group.name, group.children, componentModule)
+      let preview: React.ReactNode = null
+
+      try {
+        const viewModule = await loadViewModule(group.fileName)
+        const View = viewModule[`${group.name}View`]
+        if (isComponent(View)) {
+          preview = <View />
+        }
+      } catch {
+        // Fallback to generic composition when no dedicated view exists.
+      }
+
+      if (!preview) {
+        const componentModule = await loadComponentModule(group.fileName)
+        preview = renderComponentGroup(group.name, group.children, componentModule)
+      }
+
       return { group, preview }
     })
   )
