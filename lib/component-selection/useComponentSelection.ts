@@ -5,8 +5,14 @@ type UseComponentSelectionOptions = {
   componentHierarchy: ComponentGroup[]
 }
 
-const componentNameToSlot = (name: string) =>
-  name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
+const componentNameToSlot = (name: string) => {
+  const generatedMatch = name.match(/^Div(\d{3})$/)
+  if (generatedMatch) {
+    return `div-${generatedMatch[1]}`
+  }
+
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
+}
 
 const slotToComponentName = (slot: string) =>
   slot

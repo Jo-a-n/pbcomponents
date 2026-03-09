@@ -8,6 +8,7 @@ interface ComponentTreeProps {
   navigateDown?: (component: string) => void
   components: ComponentGroup[]
   onCreateComponent?: () => Promise<string>
+  onDeleteComponent?: (component: string) => Promise<void>
 }
 
 export function ComponentTree({
@@ -16,9 +17,11 @@ export function ComponentTree({
   navigateDown,
   components,
   onCreateComponent,
+  onDeleteComponent,
 }: ComponentTreeProps) {
   const [expanded, setExpanded] = useState(true)
   const [isCreating, setIsCreating] = useState(false)
+  const [deletingComponent, setDeletingComponent] = useState<string | null>(null)
   const [createMessage, setCreateMessage] = useState('')
 
   const handleCreateComponent = async () => {
@@ -34,6 +37,26 @@ export function ComponentTree({
       setCreateMessage('Failed to create component')
     } finally {
       setIsCreating(false)
+    }
+  }
+
+  const isGeneratedComponent = (componentName: string) => /^Div\d{3}$/.test(componentName)
+
+  const handleDeleteComponent = async (componentName: string) => {
+    if (!onDeleteComponent || deletingComponent) return
+    if (!window.confirm(`Delete ${componentName} and its files?`)) return
+
+    setDeletingComponent(componentName)
+    setCreateMessage('')
+    try {
+      await onDeleteComponent(componentName)
+      setCreateMessage(`Deleted ${componentName}`)
+      setSelectedComponent(null)
+    } catch (error) {
+      console.error(error)
+      setCreateMessage(`Failed to delete ${componentName}`)
+    } finally {
+      setDeletingComponent(null)
     }
   }
 
@@ -70,8 +93,22 @@ export function ComponentTree({
             >
               <span className="mr-2 text-sm">📁</span>
               <span className="text-sm font-medium">{comp.name}</span>
+              {isGeneratedComponent(comp.name) && (
+                <button
+                  className="ml-auto mr-2 h-5 w-5 rounded border border-red-300 text-xs leading-none text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleDeleteComponent(comp.name)
+                  }}
+                  disabled={!onDeleteComponent || deletingComponent === comp.name}
+                  title={`Delete ${comp.name}`}
+                  aria-label={`Delete ${comp.name}`}
+                >
+                  {deletingComponent === comp.name ? '…' : '×'}
+                </button>
+              )}
               <button
-                className="ml-auto text-xs"
+                className="text-xs"
                 onClick={(e) => {
                   e.stopPropagation()
                   setExpanded(!expanded)

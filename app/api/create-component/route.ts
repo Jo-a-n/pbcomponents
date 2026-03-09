@@ -71,11 +71,19 @@ function createComponentJsonTemplate(componentName: string) {
   return JSON.stringify(
     {
       [componentName]: [
-        'border border-zinc-200 rounded-md p-4',
-        'flex flex-row items-center justify-between gap-3',
+        'size-full border-1 bg-none rounded-none pt-none pr-none pb-none pl-none',
+        'flex flex-row gap-4 flex-nowrap',
       ],
-      [`${componentName}Title`]: ['text-sm font-semibold text-zinc-900'],
-      [`${componentName}Action`]: ['text-sm text-zinc-600'],
+      [`${componentName}Title`]: [
+        'border-none bg-red-50 rounded-none pt-none pr-none pb-none pl-none',
+        'flex basis-full justify-items-end items-center',
+        'text-start',
+      ],
+      [`${componentName}Action`]: [
+        'border-none bg-red-50 rounded-none pt-none pr-none pb-none pl-none',
+        'flex basis-full justify-items-center items-center',
+        'text-start',
+      ],
     },
     null,
     2

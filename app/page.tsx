@@ -42,6 +42,22 @@ export default function Home() {
     return data.componentName as string
   }
 
+  const handleDeleteComponent = async (componentName: string) => {
+    const response = await fetch('/api/delete-component', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ componentName }),
+    })
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data?.error ?? 'Failed to delete component')
+    }
+
+    // Refresh so the updated generated hierarchy is re-imported.
+    window.location.reload()
+  }
+
   return (
     <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <ComponentTree
@@ -50,6 +66,7 @@ export default function Home() {
         navigateDown={navigateDown}
         components={componentHierarchy}
         onCreateComponent={handleCreateComponent}
+        onDeleteComponent={handleDeleteComponent}
       />
 
       <main className="flex-1 flex items-center justify-center py-32 px-16 ml-64">
