@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import {
   Card,
   CardAction,
@@ -52,6 +53,14 @@ export default function Home() {
       />
 
       <main className="flex-1 flex items-center justify-center py-32 px-16 ml-64">
+        <div className="absolute top-6 right-[26rem]">
+          <Link
+            href="/library"
+            className="inline-flex items-center rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+          >
+            Open Library
+          </Link>
+        </div>
         <div
           ref={canvasRef}
           className="w-full max-w-3xl grid gap-4"
