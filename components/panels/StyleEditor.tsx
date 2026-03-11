@@ -179,6 +179,36 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
         </div>
       )}
 
+      <div>Padding</div>
+      <div className="flex-row flex gap-2">
+        <PaddingInput
+          classNameKey="pl"
+          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
+          getValue={getValue}
+          handleChange={handleChange}
+        />
+        <PaddingInput
+          classNameKey="pr"
+          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
+          getValue={getValue}
+          handleChange={handleChange}
+        />
+      </div>
+      <div className="flex-row flex gap-2">
+        <PaddingInput
+          classNameKey="pt"
+          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
+          getValue={getValue}
+          handleChange={handleChange}
+        />
+        <PaddingInput
+          classNameKey="pb"
+          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
+          getValue={getValue}
+          handleChange={handleChange}
+        />
+      </div>
+
       <div className="mb-6 space-y-4">
         {styleEntries.map(([key, value]) => (
           <div key={key} className="space-y-2">
@@ -208,5 +238,46 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
       {saveMessage && <div className="mt-2 text-center text-sm font-medium">{saveMessage}</div>}
     </div>
+  )
+}
+
+function PaddingInput({
+  classNameKey,
+  componentKey,
+  getValue,
+  handleChange,
+}: {
+  classNameKey: string
+  componentKey: string
+  getValue: (key: string) => string
+  handleChange: (key: string, value: string) => void
+}) {
+  const fullClassName = componentKey ? getValue(componentKey) : ''
+
+  const handleUpdate = (key: string, value: string) => {
+    if (!componentKey) return
+
+    const nextValue = value.trim()
+    const currentToken = fullClassName.match(new RegExp(`\\b${key}-[^\\s]+\\b`))?.[0]
+    const replacement = `${key}-${nextValue}`
+    const updatedValue =
+      nextValue === ''
+        ? (currentToken ? fullClassName.replace(currentToken, '') : fullClassName)
+            .replace(/\s+/g, ' ')
+            .trim()
+        : currentToken
+          ? fullClassName.replace(currentToken, replacement)
+          : `${fullClassName} ${replacement}`.replace(/\s+/g, ' ').trim()
+
+    handleChange(componentKey, updatedValue)
+  }
+
+  return (
+    <input
+      type="text"
+      className="mb-4 w-full rounded border border-zinc-300 bg-zinc-50 p-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+      value={fullClassName.match(new RegExp(`\\b${classNameKey}-([^\\s]+)`))?.[1] ?? ''}
+      onChange={(v) => handleUpdate(classNameKey, v.target.value)}
+    />
   )
 }
