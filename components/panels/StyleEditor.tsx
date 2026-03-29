@@ -1,14 +1,26 @@
 'use client'
+
 import { useEffect, useMemo, useState } from 'react'
 import type { ComponentGroup } from '@/lib/component-selection/types'
 
 type StyleValue = string | string[]
 type Styles = Record<string, StyleValue>
+type PaddingMode = 'axes' | 'sides'
+type PaddingAxis = 'x' | 'y'
+type PaddingMarker = 'pl' | 'pr' | 'pt' | 'pb'
 
 interface StyleEditorProps {
   selectedComponent: string | null
   components: ComponentGroup[]
 }
+
+const DIRECTION_OPTIONS = [
+  { label: 'Row', value: 'row', icon: '→' },
+  { label: 'Column', value: 'col', icon: '↓' },
+  { label: 'Grid', value: 'grid', icon: '⋮⋮' },
+] as const
+
+const BORDER_WEIGHT_OPTIONS = ['border', 'border-0', 'border-2', 'border-4'] as const
 
 function componentNameToFileName(componentName: string) {
   const generatedMatch = componentName.match(/^Div(\d{3})$/)
@@ -40,11 +52,158 @@ function getBreadcrumb(selectedComponent: string | null, components: ComponentGr
   return [group.name, selectedComponent]
 }
 
+function toClassTokens(value: StyleValue | undefined) {
+  if (!value) return [] as string[]
+  const raw = Array.isArray(value) ? value.join(' ') : value
+  return raw
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+}
+
+function fromClassTokens(tokens: string[], originalValue: StyleValue | undefined): StyleValue {
+  const normalized = Array.from(new Set(tokens.filter(Boolean)))
+  if (Array.isArray(originalValue)) {
+    return [normalized.join(' ')]
+  }
+  return normalized.join(' ')
+}
+
+function findToken(tokens: string[], pattern: RegExp) {
+  return tokens.find((token) => pattern.test(token)) ?? ''
+}
+
+function replaceTokens(tokens: string[], pattern: RegExp, nextTokens: string[]) {
+  return [...tokens.filter((token) => !pattern.test(token)), ...nextTokens.filter(Boolean)]
+}
+
+function getTokenValue(token: string, prefix: string) {
+  return token.startsWith(`${prefix}-`) ? token.slice(prefix.length + 1) : ''
+}
+
+function guessPaddingMode(tokens: string[]): PaddingMode {
+  return tokens.some((token) => /^(pl|pr|pt|pb)-.+$/.test(token)) ? 'sides' : 'axes'
+}
+
+function parsePairedValue(value: string) {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+}
+
+function formatAxisValue(firstValue: string, secondValue: string) {
+  if (!firstValue && !secondValue) return ''
+  if (firstValue === secondValue) return firstValue
+  return `${firstValue || '0'}, ${secondValue || '0'}`
+}
+
+function componentTitle(selectedComponent: string | null) {
+  return selectedComponent ?? 'Division'
+}
+
+function guessSizeMode(tokens: string[], axis: 'w' | 'h') {
+  const fullToken = axis === 'w' ? /^(w-full|flex-1|basis-full)$/ : /^h-full$/
+  const hugToken = axis === 'w' ? /^w-fit$/ : /^h-fit$/
+
+  if (tokens.some((token) => fullToken.test(token))) return 'Fill'
+  if (tokens.some((token) => hugToken.test(token))) return 'Hug'
+  return 'Fixed'
+}
+
+function guessDirection(tokens: string[]) {
+  if (tokens.includes('grid')) return 'grid'
+  if (tokens.includes('flex-col')) return 'col'
+  return 'row'
+}
+
+function guessToggle(tokens: string[], token: string) {
+  return tokens.includes(token)
+}
+
+function tinyLabelClass() {
+  return 'text-[10px] font-medium leading-none text-black/60'
+}
+
+function fieldShellClass() {
+  return 'flex h-6 items-center gap-1 rounded-lg bg-gray-100 px-2 text-[12px] font-medium text-black'
+}
+
+function markerClass(marker: PaddingMarker) {
+  if (marker === 'pl' || marker === 'pr') {
+    return 'absolute inset-y-0 w-[5px] rounded-full bg-gray-300'
+  }
+
+  return 'absolute inset-x-0 h-[5px] rounded-full bg-gray-300'
+}
+
+function markerPositionClass(marker: PaddingMarker) {
+  switch (marker) {
+    case 'pl':
+      return 'left-0'
+    case 'pr':
+      return 'right-0'
+    case 'pt':
+      return 'top-0'
+    case 'pb':
+      return 'bottom-0'
+  }
+}
+
+function paddingFieldInputClass(hasValue: boolean, markers: PaddingMarker[]) {
+  const hasHorizontalMarkers = markers.includes('pl') || markers.includes('pr')
+  const hasVerticalMarkers = markers.includes('pt') || markers.includes('pb')
+  const base = hasValue
+    ? 'h-8 w-full rounded-lg bg-gray-100 text-[12px] font-medium outline-none overflow-hidden'
+    : 'h-8 w-full rounded-lg border border-dashed border-gray-300 text-[12px] font-medium outline-none overflow-hidden'
+  const horizontalPadding = hasHorizontalMarkers ? 'px-[9px]' : 'px-3'
+  const verticalPadding = hasVerticalMarkers ? 'py-[5px]' : ''
+
+  return [base, horizontalPadding, verticalPadding].filter(Boolean).join(' ')
+}
+
+function PaddingField({
+  value,
+  onChange,
+  hasValue,
+  placeholder,
+  ariaLabel,
+  markers,
+}: {
+  value: string
+  onChange: (value: string) => void
+  hasValue: boolean
+  placeholder: string
+  ariaLabel: string
+  markers: PaddingMarker[]
+}) {
+  return (
+    <div className="relative">
+      {markers.map((marker) => (
+        <span
+          key={marker}
+          aria-hidden="true"
+          className={`${markerClass(marker)} ${markerPositionClass(marker)}`}
+        />
+      ))}
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={paddingFieldInputClass(hasValue, markers)}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+      />
+    </div>
+  )
+}
+
 export function StyleEditor({ selectedComponent, components }: StyleEditorProps) {
   const [styles, setStyles] = useState<Styles>({})
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState('')
+  const [paddingModeOverride, setPaddingModeOverride] = useState<PaddingMode | null>(null)
 
   const breadcrumb = getBreadcrumb(selectedComponent, components)
   const selectedGroup = useMemo(
@@ -52,6 +211,39 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     [components, selectedComponent]
   )
   const selectedFileName = selectedGroup ? componentNameToFileName(selectedGroup.name) : null
+  const selectedStyleValue = selectedComponent ? styles[selectedComponent] : undefined
+  const classTokens = useMemo(
+    () => toClassTokens(selectedStyleValue),
+    [selectedStyleValue]
+  )
+  const classText = classTokens.join(' ')
+  const widthMode = guessSizeMode(classTokens, 'w')
+  const heightMode = guessSizeMode(classTokens, 'h')
+  const directionMode = guessDirection(classTokens)
+  const isFlex = guessToggle(classTokens, 'flex')
+  const gapClass = findToken(classTokens, /^gap-.+/)
+  const backgroundClass = findToken(classTokens, /^bg-(?!clip-padding$).+/)
+  const borderColorClass = findToken(
+    classTokens,
+    /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/
+  )
+  const borderWeightClass = findToken(classTokens, /^border(?:-(?:0|2|4|8))?$/) || 'border'
+  const radiusClass = findToken(classTokens, /^rounded(?:-[a-z]+)?(?:-.+)?$/)
+  const widthClass = findToken(classTokens, /^(w-.+|basis-.+|flex-1)$/)
+  const heightClass = findToken(classTokens, /^h-.+/)
+  const paddingXClass = findToken(classTokens, /^px-.+/)
+  const paddingYClass = findToken(classTokens, /^py-.+/)
+  const paddingLeftClass = findToken(classTokens, /^pl-.+/)
+  const paddingRightClass = findToken(classTokens, /^pr-.+/)
+  const paddingTopClass = findToken(classTokens, /^pt-.+/)
+  const paddingBottomClass = findToken(classTokens, /^pb-.+/)
+  const paddingMode = paddingModeOverride ?? guessPaddingMode(classTokens)
+  const paddingLeftValue = getTokenValue(paddingLeftClass, 'pl') || getTokenValue(paddingXClass, 'px')
+  const paddingRightValue = getTokenValue(paddingRightClass, 'pr') || getTokenValue(paddingXClass, 'px')
+  const paddingTopValue = getTokenValue(paddingTopClass, 'pt') || getTokenValue(paddingYClass, 'py')
+  const paddingBottomValue = getTokenValue(paddingBottomClass, 'pb') || getTokenValue(paddingYClass, 'py')
+  const paddingAxisXValue = formatAxisValue(paddingLeftValue, paddingRightValue)
+  const paddingAxisYValue = formatAxisValue(paddingTopValue, paddingBottomValue)
 
   useEffect(() => {
     if (!selectedFileName) {
@@ -91,37 +283,128 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     }
   }, [selectedFileName])
 
-  const handleChange = (key: string, value: string) => {
-    const originalValue = styles[key]
-    if (Array.isArray(originalValue)) {
-      const arrayValue = value
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-      setStyles((prev) => ({ ...prev, [key]: arrayValue }))
-      return
-    }
+  useEffect(() => {
+    setPaddingModeOverride(null)
+  }, [selectedComponent])
 
-    setStyles((prev) => ({ ...prev, [key]: value }))
+  const updateSelectedStyle = (nextTokens: string[]) => {
+    if (!selectedComponent) return
+
+    setStyles((prev) => ({
+      ...prev,
+      [selectedComponent]: fromClassTokens(nextTokens, prev[selectedComponent]),
+    }))
   }
 
-  const getValue = (key: string) => {
-    const val = styles[key]
-    if (Array.isArray(val)) {
-      return val.join('\n')
+  const updateSingleField = (pattern: RegExp, nextValue: string) => {
+    const nextTokens = replaceTokens(classTokens, pattern, nextValue ? [nextValue] : [])
+    updateSelectedStyle(nextTokens)
+  }
+
+  const handleRawClassChange = (value: string) => {
+    if (!selectedComponent) return
+
+    const nextTokens = value
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(Boolean)
+
+    updateSelectedStyle(nextTokens)
+  }
+
+  const handleFlexToggle = () => {
+    const nextTokens = isFlex
+      ? classTokens.filter((token) => token !== 'flex' && token !== 'flex-row' && token !== 'flex-col')
+      : [...classTokens, 'flex', directionMode === 'col' ? 'flex-col' : 'flex-row']
+    updateSelectedStyle(nextTokens)
+  }
+
+  const handleDirectionChange = (nextDirection: 'row' | 'col' | 'grid') => {
+    let nextTokens = replaceTokens(classTokens, /^(flex-row|flex-col|grid)$/, [])
+    if (nextDirection === 'grid') {
+      nextTokens = replaceTokens(nextTokens, /^flex$/, ['grid'])
+    } else {
+      nextTokens = replaceTokens(nextTokens, /^grid$/, ['flex', nextDirection === 'col' ? 'flex-col' : 'flex-row'])
     }
-    return val ?? ''
+    updateSelectedStyle(nextTokens)
+  }
+
+  const handleSizeModeChange = (axis: 'w' | 'h', mode: 'Fill' | 'Hug' | 'Fixed') => {
+    const pattern = axis === 'w' ? /^(w-.+|basis-.+|flex-1)$/ : /^h-.+$/
+    let nextValue = ''
+
+    if (mode === 'Fill') {
+      nextValue = axis === 'w' ? 'w-full' : 'h-full'
+    } else if (mode === 'Hug') {
+      nextValue = axis === 'w' ? 'w-fit' : 'h-fit'
+    }
+
+    updateSingleField(pattern, nextValue)
+  }
+
+  const handlePaddingValueChange = (
+    pattern: RegExp,
+    prefix: 'px' | 'py' | 'pl' | 'pr' | 'pt' | 'pb',
+    nextValue: string
+  ) => {
+    updateSingleField(pattern, nextValue.trim() ? `${prefix}-${nextValue.trim()}` : '')
+  }
+
+  const getPaddingTokensForAxis = (axis: PaddingAxis, nextValue: string) => {
+    const values = parsePairedValue(nextValue)
+
+    if (values.length === 0) return [] as string[]
+    if (values.length === 1 || values[0] === values[1]) {
+      return [`p${axis}-${values[0]}`]
+    }
+
+    return axis === 'x'
+      ? [`pl-${values[0]}`, `pr-${values[1]}`]
+      : [`pt-${values[0]}`, `pb-${values[1]}`]
+  }
+
+  const handlePaddingAxisChange = (axis: PaddingAxis, nextValue: string) => {
+    const pattern = axis === 'x' ? /^(px|pl|pr)-.+$/ : /^(py|pt|pb)-.+$/
+    const nextPaddingTokens = getPaddingTokensForAxis(axis, nextValue)
+    updateSelectedStyle(replaceTokens(classTokens, pattern, nextPaddingTokens))
+  }
+
+  const handlePaddingModeChange = (nextMode: PaddingMode) => {
+    if (nextMode === paddingMode) return
+
+    if (nextMode === 'sides') {
+      const nextPaddingTokens: string[] = []
+      if (paddingLeftValue) nextPaddingTokens.push(`pl-${paddingLeftValue}`)
+      if (paddingRightValue) nextPaddingTokens.push(`pr-${paddingRightValue}`)
+      if (paddingTopValue) nextPaddingTokens.push(`pt-${paddingTopValue}`)
+      if (paddingBottomValue) nextPaddingTokens.push(`pb-${paddingBottomValue}`)
+
+      updateSelectedStyle(
+        replaceTokens(classTokens, /^(px|py|pl|pr|pt|pb)-.+$/, nextPaddingTokens)
+      )
+    }
+
+    setPaddingModeOverride(nextMode)
+  }
+
+  const normalizePaddingTokensForSave = () => {
+    if (paddingMode !== 'axes') return classTokens
+
+    const nextPaddingTokens = [
+      ...getPaddingTokensForAxis('x', paddingAxisXValue),
+      ...getPaddingTokensForAxis('y', paddingAxisYValue),
+    ]
+
+    return replaceTokens(classTokens, /^(px|py|pl|pr|pt|pb)-.+$/, nextPaddingTokens)
   }
 
   const handleSave = async () => {
-    if (!selectedFileName) return
+    if (!selectedFileName || !selectedComponent) return
+
+    const nextTokens = normalizePaddingTokensForSave()
 
     setIsSaving(true)
     setSaveMessage('')
-
-    const dataToSave = selectedComponent
-      ? { [selectedComponent]: styles[selectedComponent] }
-      : styles
 
     try {
       const response = await fetch('/api/save-styles', {
@@ -129,155 +412,351 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileName: selectedFileName,
-          styles: dataToSave,
+          styles: {
+            [selectedComponent]: fromClassTokens(nextTokens, styles[selectedComponent]),
+          },
         }),
       })
 
-      if (response.ok) {
-        setSaveMessage(`Saved to ${selectedFileName}.json`)
-        setTimeout(() => setSaveMessage(''), 3000)
-      } else {
-        setSaveMessage('Failed to save styles')
+      if (!response.ok) {
+        throw new Error('Failed to save styles')
       }
+
+      setStyles((prev) => ({
+        ...prev,
+        [selectedComponent]: fromClassTokens(nextTokens, prev[selectedComponent]),
+      }))
+      setSaveMessage(`Saved to ${selectedFileName}.json`)
+      setTimeout(() => setSaveMessage(''), 3000)
     } catch (error) {
-      setSaveMessage('Error saving styles')
       console.error(error)
+      setSaveMessage('Failed to save styles')
     } finally {
       setIsSaving(false)
     }
   }
 
-  const styleEntries = selectedComponent
-    ? Object.entries(styles).filter(([key]) => key === selectedComponent)
-    : Object.entries(styles)
-
-  const hasStyles = selectedComponent ? styleEntries.length > 0 : Object.keys(styles).length > 0
-
   return (
-    <div className="fixed right-0 top-0 h-screen w-96 overflow-y-auto border-l border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
-      <h2 className="sticky top-0 mb-4 bg-white py-2 text-xl font-bold dark:bg-zinc-900">
-        Style Editor {selectedComponent && ` - ${selectedComponent}`}
-      </h2>
-
-      {breadcrumb && (
-        <div className="mb-4 rounded-xl border border-zinc-100 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-          Editing: {breadcrumb.join(' / ')}
-        </div>
-      )}
-
-      {isLoading && (
-        <div className="mb-4 rounded border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-          Loading styles...
-        </div>
-      )}
-
-      {!isLoading && !hasStyles && selectedComponent && (
-        <div className="mb-4 rounded border border-yellow-300 bg-yellow-100 p-3 dark:border-yellow-700 dark:bg-yellow-900">
-          <p className="text-sm text-yellow-800 dark:text-yellow-200">
-            No styles found for {selectedComponent} in {selectedFileName}.json.
-          </p>
-        </div>
-      )}
-
-      <div>Padding</div>
-      <div className="flex-row flex gap-2">
-        <PaddingInput
-          classNameKey="pl"
-          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
-          getValue={getValue}
-          handleChange={handleChange}
-        />
-        <PaddingInput
-          classNameKey="pr"
-          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
-          getValue={getValue}
-          handleChange={handleChange}
-        />
-      </div>
-      <div className="flex-row flex gap-2">
-        <PaddingInput
-          classNameKey="pt"
-          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
-          getValue={getValue}
-          handleChange={handleChange}
-        />
-        <PaddingInput
-          classNameKey="pb"
-          componentKey={selectedComponent ?? styleEntries[0]?.[0] ?? ''}
-          getValue={getValue}
-          handleChange={handleChange}
-        />
-      </div>
-
-      <div className="mb-6 space-y-4">
-        {styleEntries.map(([key, value]) => (
-          <div key={key} className="space-y-2">
-            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-              {key}
-              {Array.isArray(value) && <span className="text-xs text-gray-500"> (array)</span>}
-            </label>
-            <textarea
-              value={getValue(key)}
-              onChange={(e) => handleChange(key, e.target.value)}
-              className="h-24 w-full resize-none rounded border border-zinc-300 bg-zinc-50 p-2 font-mono text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-              placeholder={Array.isArray(value) ? 'Group items by editing in separate lines' : 'Enter value'}
-            />
+    <aside className="fixed right-0 top-0 h-screen w-96 overflow-y-auto border-l border-zinc-200 bg-white px-3 py-5 shadow-lg">
+      <div className="space-y-5">
+        <section className="space-y-4 border-b border-zinc-200 pb-5">
+          <div className="pt-3">
+            <p className="text-[18px] font-semibold tracking-[-0.02em] text-zinc-400">
+              {componentTitle(selectedComponent)}
+            </p>
+            {breadcrumb && (
+              <p className="mt-1 text-xs text-zinc-500">{breadcrumb.join(' / ')}</p>
+            )}
           </div>
-        ))}
+
+          {!selectedComponent && (
+            <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-6 text-sm text-zinc-500">
+              Select a component on the canvas to inspect and edit its utility classes.
+            </div>
+          )}
+
+          {selectedComponent && (
+            <>
+              <div className="flex items-center gap-3 pt-1">
+                <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">Flex</p>
+                <button
+                  type="button"
+                  onClick={handleFlexToggle}
+                  className={`relative h-5 w-8 rounded-full transition ${isFlex ? 'bg-black' : 'bg-zinc-300'}`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
+                      isFlex ? 'left-[14px]' : 'left-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className={tinyLabelClass()}>Width</span>
+                  <div className={fieldShellClass()}>
+                    <select
+                      value={widthMode}
+                      onChange={(event) => handleSizeModeChange('w', event.target.value as 'Fill' | 'Hug' | 'Fixed')}
+                      className="w-full bg-transparent outline-none"
+                    >
+                      <option>Fill</option>
+                      <option>Hug</option>
+                      <option>Fixed</option>
+                    </select>
+                  </div>
+                </label>
+
+                <label className="space-y-1">
+                  <span className={tinyLabelClass()}>Height</span>
+                  <div className={fieldShellClass()}>
+                    <select
+                      value={heightMode}
+                      onChange={(event) => handleSizeModeChange('h', event.target.value as 'Fill' | 'Hug' | 'Fixed')}
+                      className="w-full bg-transparent outline-none"
+                    >
+                      <option>Fill</option>
+                      <option>Hug</option>
+                      <option>Fixed</option>
+                    </select>
+                  </div>
+                </label>
+              </div>
+            </>
+          )}
+        </section>
+
+        {selectedComponent && (
+          <>
+            <section className="space-y-4 border-b border-zinc-200 pb-5">
+              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">
+                Flex Direction / Grid
+              </p>
+
+              <div className="grid grid-cols-3 gap-1">
+                {DIRECTION_OPTIONS.map((option) => {
+                  const isActive = directionMode === option.value
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => handleDirectionChange(option.value)}
+                      className={`flex h-8 items-center justify-center rounded-lg text-sm font-semibold transition ${
+                        isActive ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
+                      }`}
+                    >
+                      {option.icon}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <label className="block space-y-1">
+                <span className={tinyLabelClass()}>Gap</span>
+                <input
+                  value={gapClass}
+                  onChange={(event) => updateSingleField(/^gap-.+$/, event.target.value)}
+                  className="h-6 w-[79px] rounded-lg bg-gray-100 px-3 text-[12px] font-medium text-black outline-none"
+                  placeholder="gap-4"
+                />
+              </label>
+
+              <div className="space-y-1">
+                <span className={tinyLabelClass()}>Alignment</span>
+                <div className="grid grid-cols-3 gap-3 rounded-xl bg-gray-100 p-3 w-fit">
+                  {Array.from({ length: 9 }, (_, index) => (
+                    <div
+                      key={index}
+                      className={`h-3 w-3 rounded-sm border border-black/10 ${
+                        index === 3 ? 'bg-black' : 'bg-black/10'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-4 border-b border-zinc-200 pb-5">
+              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Limits</p>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-3">
+                  <span className={tinyLabelClass()}>Padding</span>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1">
+                    {(['axes', 'sides'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => handlePaddingModeChange(mode)}
+                        className={`rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                          paddingMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
+                        }`}
+                      >
+                        {mode === 'axes' ? 'Axes' : 'Sides'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                  {paddingMode === 'axes' ? (
+                    <>
+                      <PaddingField
+                        value={paddingAxisXValue}
+                        onChange={(value) => handlePaddingAxisChange('x', value)}
+                        hasValue={Boolean(paddingAxisXValue)}
+                        placeholder="none"
+                        ariaLabel="Padding X"
+                        markers={['pl', 'pr']}
+                      />
+                      <PaddingField
+                        value={paddingAxisYValue}
+                        onChange={(value) => handlePaddingAxisChange('y', value)}
+                        hasValue={Boolean(paddingAxisYValue)}
+                        placeholder="none"
+                        ariaLabel="Padding Y"
+                        markers={['pt', 'pb']}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <PaddingField
+                        value={getTokenValue(paddingLeftClass, 'pl')}
+                        onChange={(value) => handlePaddingValueChange(/^pl-.+$/, 'pl', value)}
+                        hasValue={Boolean(getTokenValue(paddingLeftClass, 'pl'))}
+                        placeholder="none"
+                        ariaLabel="Padding Left"
+                        markers={['pl']}
+                      />
+                      <PaddingField
+                        value={getTokenValue(paddingTopClass, 'pt')}
+                        onChange={(value) => handlePaddingValueChange(/^pt-.+$/, 'pt', value)}
+                        hasValue={Boolean(getTokenValue(paddingTopClass, 'pt'))}
+                        placeholder="none"
+                        ariaLabel="Padding Top"
+                        markers={['pt']}
+                      />
+                      <PaddingField
+                        value={getTokenValue(paddingRightClass, 'pr')}
+                        onChange={(value) => handlePaddingValueChange(/^pr-.+$/, 'pr', value)}
+                        hasValue={Boolean(getTokenValue(paddingRightClass, 'pr'))}
+                        placeholder="none"
+                        ariaLabel="Padding Right"
+                        markers={['pr']}
+                      />
+                      <PaddingField
+                        value={getTokenValue(paddingBottomClass, 'pb')}
+                        onChange={(value) => handlePaddingValueChange(/^pb-.+$/, 'pb', value)}
+                        hasValue={Boolean(getTokenValue(paddingBottomClass, 'pb'))}
+                        placeholder="none"
+                        ariaLabel="Padding Bottom"
+                        markers={['pb']}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className={tinyLabelClass()}>Corner radius</span>
+                <input
+                  value={radiusClass}
+                  onChange={(event) => updateSingleField(/^rounded(?:-[a-z]+)?(?:-.+)?$/, event.target.value)}
+                  className="h-6 w-full rounded-lg bg-gray-100 px-3 text-[12px] font-medium outline-none"
+                  placeholder="rounded-xl"
+                />
+              </div>
+
+              <label className="flex items-center gap-2">
+                <span className={`flex-1 ${tinyLabelClass()}`}>Width Max/Min</span>
+                <input
+                  value={widthClass}
+                  onChange={(event) => updateSingleField(/^(w-.+|basis-.+|flex-1)$/, event.target.value)}
+                  className="h-6 w-28 rounded-lg bg-gray-100 px-3 text-[12px] font-medium outline-none"
+                  placeholder="w-full"
+                />
+              </label>
+
+              <label className="flex items-center gap-2">
+                <span className={`flex-1 ${tinyLabelClass()}`}>Height Max/Min</span>
+                <input
+                  value={heightClass}
+                  onChange={(event) => updateSingleField(/^h-.+$/, event.target.value)}
+                  className="h-6 w-28 rounded-lg bg-gray-100 px-3 text-[12px] font-medium outline-none"
+                  placeholder="h-fit"
+                />
+              </label>
+            </section>
+
+            <section className="space-y-4 border-b border-zinc-200 pb-5">
+              <div className="flex items-center gap-2 pt-1">
+                <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">
+                  Background Color
+                </p>
+                <span className="text-2xl leading-none">+</span>
+              </div>
+              <div className="flex gap-1">
+                <input
+                  value={backgroundClass}
+                  onChange={(event) => updateSingleField(/^bg-(?!clip-padding$).+$/, event.target.value)}
+                  className="h-6 flex-1 rounded-lg bg-gray-100 px-3 text-[10px] font-medium text-black/70 outline-none"
+                  placeholder="bg-red-100"
+                />
+                <div className="flex h-6 w-11 items-center justify-center rounded-lg bg-gray-100 text-[10px] font-medium text-black/70">
+                  100%
+                </div>
+                <div className="h-6 w-[30px] rounded-lg border border-zinc-200 bg-white" />
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <div className="flex items-center gap-2 pt-1">
+                <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">Border</p>
+                <span className="text-2xl leading-none">+</span>
+              </div>
+
+              <div className="flex gap-1">
+                <input
+                  value={borderColorClass}
+                  onChange={(event) =>
+                    updateSingleField(
+                      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
+                      event.target.value
+                    )
+                  }
+                  className="h-6 flex-1 rounded-lg bg-gray-100 px-3 text-[10px] font-medium text-black/70 outline-none"
+                  placeholder="border-zinc-200"
+                />
+                <div className="flex h-6 w-11 items-center justify-center rounded-lg bg-gray-100 text-[10px] font-medium text-black/70">
+                  100%
+                </div>
+                <div className="h-6 w-[30px] rounded-lg border border-zinc-200 bg-white" />
+              </div>
+
+              <div className="space-y-1">
+                <span className={tinyLabelClass()}>Border-weight</span>
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-dashed border-gray-800 p-2">
+                  {BORDER_WEIGHT_OPTIONS.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => updateSingleField(/^border(?:-(?:0|2|4|8))?$/, option)}
+                      className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+                        borderWeightClass === option ? 'bg-gray-100 text-black' : 'bg-gray-100/50 text-zinc-400'
+                      }`}
+                    >
+                      {option === 'border' ? '1px' : option.replace('border-', '')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-2 border-t border-zinc-200 pt-5">
+              <label className="block space-y-1">
+                <span className={tinyLabelClass()}>Advanced classes</span>
+                <textarea
+                  value={classText}
+                  onChange={(event) => handleRawClassChange(event.target.value)}
+                  className="h-28 w-full resize-none rounded-2xl bg-zinc-50 px-3 py-3 font-mono text-xs text-zinc-700 outline-none ring-1 ring-zinc-200"
+                  placeholder="flex gap-4 rounded-xl"
+                />
+              </label>
+
+              <button
+                onClick={handleSave}
+                disabled={isSaving || isLoading || !selectedComponent}
+                className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
+              >
+                {isSaving ? 'Saving...' : 'Save changes'}
+              </button>
+
+              {saveMessage && <p className="text-center text-xs font-medium text-zinc-500">{saveMessage}</p>}
+            </section>
+          </>
+        )}
       </div>
-
-      {selectedFileName && hasStyles && (
-        <button
-          onClick={handleSave}
-          disabled={isSaving || isLoading}
-          className="sticky bottom-0 w-full rounded bg-green-500 px-4 py-3 font-medium text-white transition hover:bg-green-600 disabled:bg-gray-400"
-        >
-          {isSaving ? 'Saving...' : `Save to ${selectedFileName}.json`}
-        </button>
-      )}
-
-      {saveMessage && <div className="mt-2 text-center text-sm font-medium">{saveMessage}</div>}
-    </div>
-  )
-}
-
-function PaddingInput({
-  classNameKey,
-  componentKey,
-  getValue,
-  handleChange,
-}: {
-  classNameKey: string
-  componentKey: string
-  getValue: (key: string) => string
-  handleChange: (key: string, value: string) => void
-}) {
-  const fullClassName = componentKey ? getValue(componentKey) : ''
-
-  const handleUpdate = (key: string, value: string) => {
-    if (!componentKey) return
-
-    const nextValue = value.trim()
-    const currentToken = fullClassName.match(new RegExp(`\\b${key}-[^\\s]+\\b`))?.[0]
-    const replacement = `${key}-${nextValue}`
-    const updatedValue =
-      nextValue === ''
-        ? (currentToken ? fullClassName.replace(currentToken, '') : fullClassName)
-            .replace(/\s+/g, ' ')
-            .trim()
-        : currentToken
-          ? fullClassName.replace(currentToken, replacement)
-          : `${fullClassName} ${replacement}`.replace(/\s+/g, ' ').trim()
-
-    handleChange(componentKey, updatedValue)
-  }
-
-  return (
-    <input
-      type="text"
-      className="mb-4 w-full rounded border border-zinc-300 bg-zinc-50 p-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-      value={fullClassName.match(new RegExp(`\\b${classNameKey}-([^\\s]+)`))?.[1] ?? ''}
-      onChange={(v) => handleUpdate(classNameKey, v.target.value)}
-    />
+    </aside>
   )
 }

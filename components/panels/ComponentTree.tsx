@@ -61,11 +61,11 @@ export function ComponentTree({
   }
 
   return (
-    <div className="fixed left-0 top-0 h-screen w-64 bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800 overflow-y-auto p-4 shadow-lg">
-      <div className="mb-4 sticky top-0 flex items-center bg-white py-2 dark:bg-zinc-900">
+    <div className="fixed left-0 top-0 h-screen w-64 overflow-y-auto border-r border-zinc-200 bg-white p-4 shadow-lg">
+      <div className="sticky top-0 mb-4 flex items-center bg-white py-2">
         <h2 className="text-xl font-bold">Component Tree</h2>
         <button
-          className="ml-auto h-8 w-8 rounded border border-zinc-300 text-lg leading-none text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          className="ml-auto h-8 w-8 rounded border border-zinc-300 text-lg leading-none text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
           onClick={handleCreateComponent}
           disabled={!onCreateComponent || isCreating}
           title="Create a new component"
@@ -76,7 +76,7 @@ export function ComponentTree({
       </div>
 
       {createMessage && (
-        <p className="mb-3 rounded border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+        <p className="mb-3 rounded border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700">
           {createMessage}
         </p>
       )}
@@ -86,7 +86,7 @@ export function ComponentTree({
           <div key={comp.name}>
             <div
               className={`flex items-center p-2 rounded cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
-                selectedComponent === comp.name ? 'bg-blue-100 dark:bg-blue-900' : ''
+                selectedComponent === comp.name ? 'bg-zinc-100' : ''
               }`}
               onClick={() => setSelectedComponent(comp.name)}
               onDoubleClick={() => navigateDown && navigateDown(comp.name)}
@@ -95,7 +95,7 @@ export function ComponentTree({
               <span className="text-sm font-medium">{comp.name}</span>
               {isGeneratedComponent(comp.name) && (
                 <button
-                  className="ml-auto mr-2 h-5 w-5 rounded border border-red-300 text-xs leading-none text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900"
+                  className="ml-auto mr-2 h-5 w-5 rounded border border-red-300 text-xs leading-none text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={(e) => {
                     e.stopPropagation()
                     void handleDeleteComponent(comp.name)
@@ -123,8 +123,8 @@ export function ComponentTree({
                 {comp.children.map((child) => (
                   <div
                     key={child}
-                    className={`flex items-center p-2 rounded cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
-                      selectedComponent === child ? 'bg-blue-100 dark:bg-blue-900' : ''
+                  className={`flex items-center p-2 rounded cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+                      selectedComponent === child ? 'bg-zinc-100' : ''
                     }`}
                     onClick={() => setSelectedComponent(child)}
                     onDoubleClick={() => navigateDown && navigateDown(child)}
@@ -140,7 +140,7 @@ export function ComponentTree({
       </div>
 
       <button
-        className="w-full mt-4 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded font-medium transition"
+        className="mt-4 w-full rounded bg-[#6b7280] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#5f6673]"
         onClick={() => setSelectedComponent(null)}
       >
         Show All
