@@ -154,6 +154,19 @@ function getTokenValue(token: string, prefix: string) {
   return token.startsWith(`${prefix}-`) ? token.slice(prefix.length + 1) : ''
 }
 
+function formatPaddingValueForInput(value: string) {
+  const arbitraryValueMatch = value.match(/^\[(.+)\]$/)
+  return arbitraryValueMatch ? arbitraryValueMatch[1] : value
+}
+
+function normalizePaddingValue(value: string) {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) return ''
+  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
+  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
+  return trimmedValue
+}
+
 function getLimitTokenValue(token: string, prefix: 'min-w' | 'max-w' | 'min-h' | 'max-h') {
   if (!token.startsWith(`${prefix}-`)) return ''
 
@@ -197,12 +210,27 @@ function guessPaddingMode(tokens: string[]): PaddingMode {
 }
 
 function parseRoundedToken(token: string) {
-  const match = token.match(/^rounded(?:-(tl|tr|br|bl|t|r|b|l))?(?:-(.+))?$/)
-  if (!match) return null
+  if (token === 'rounded') {
+    return {
+      corner: 'all' as const,
+      value: '',
+    }
+  }
+
+  const cornerMatch = token.match(/^rounded-(tl|tr|br|bl|t|r|b|l)-(.+)$/)
+  if (cornerMatch) {
+    return {
+      corner: cornerMatch[1] as 't' | 'r' | 'b' | 'l' | FullCornerKey,
+      value: cornerMatch[2],
+    }
+  }
+
+  const allMatch = token.match(/^rounded-(.+)$/)
+  if (!allMatch) return null
 
   return {
-    corner: (match[1] ?? 'all') as 'all' | 't' | 'r' | 'b' | 'l' | FullCornerKey,
-    value: match[2] ?? '',
+    corner: 'all' as const,
+    value: allMatch[1],
   }
 }
 
@@ -280,6 +308,14 @@ function guessDirection(tokens: string[]) {
 
 function guessToggle(tokens: string[], token: string) {
   return tokens.includes(token)
+}
+
+function switchTrackClass(isActive: boolean) {
+  return `relative h-5 w-8 rounded-full transition ${isActive ? 'bg-emerald-500' : 'bg-zinc-300'}`
+}
+
+function switchThumbClass(isActive: boolean) {
+  return `absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${isActive ? 'left-[14px]' : 'left-0.5'}`
 }
 
 function tinyLabelClass() {
@@ -551,10 +587,18 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const paddingTopClass = findToken(classTokens, /^pt-.+/)
   const paddingBottomClass = findToken(classTokens, /^pb-.+/)
   const paddingMode = paddingModeOverride ?? guessPaddingMode(classTokens)
-  const paddingLeftValue = getTokenValue(paddingLeftClass, 'pl') || getTokenValue(paddingXClass, 'px')
-  const paddingRightValue = getTokenValue(paddingRightClass, 'pr') || getTokenValue(paddingXClass, 'px')
-  const paddingTopValue = getTokenValue(paddingTopClass, 'pt') || getTokenValue(paddingYClass, 'py')
-  const paddingBottomValue = getTokenValue(paddingBottomClass, 'pb') || getTokenValue(paddingYClass, 'py')
+  const paddingLeftValue =
+    formatPaddingValueForInput(getTokenValue(paddingLeftClass, 'pl')) ||
+    formatPaddingValueForInput(getTokenValue(paddingXClass, 'px'))
+  const paddingRightValue =
+    formatPaddingValueForInput(getTokenValue(paddingRightClass, 'pr')) ||
+    formatPaddingValueForInput(getTokenValue(paddingXClass, 'px'))
+  const paddingTopValue =
+    formatPaddingValueForInput(getTokenValue(paddingTopClass, 'pt')) ||
+    formatPaddingValueForInput(getTokenValue(paddingYClass, 'py'))
+  const paddingBottomValue =
+    formatPaddingValueForInput(getTokenValue(paddingBottomClass, 'pb')) ||
+    formatPaddingValueForInput(getTokenValue(paddingYClass, 'py'))
   const paddingAxisXValue = formatAxisValue(paddingLeftValue, paddingRightValue)
   const paddingAxisYValue = formatAxisValue(paddingTopValue, paddingBottomValue)
   const cornerRadiusMode = cornerRadiusModeOverride ?? guessCornerRadiusMode(classTokens)
@@ -812,11 +856,12 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     prefix: 'px' | 'py' | 'pl' | 'pr' | 'pt' | 'pb',
     nextValue: string
   ) => {
-    updateSingleField(pattern, nextValue.trim() ? `${prefix}-${nextValue.trim()}` : '')
+    const normalizedValue = normalizePaddingValue(nextValue)
+    updateSingleField(pattern, normalizedValue ? `${prefix}-${normalizedValue}` : '')
   }
 
   const getPaddingTokensForAxis = (axis: PaddingAxis, nextValue: string) => {
-    const values = parsePairedValue(nextValue)
+    const values = parsePairedValue(nextValue).map(normalizePaddingValue).filter(Boolean)
 
     if (values.length === 0) return [] as string[]
     if (values.length === 1 || values[0] === values[1]) {
@@ -988,13 +1033,9 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                 <button
                   type="button"
                   onClick={handleFlexToggle}
-                  className={`relative h-5 w-8 rounded-full transition ${isFlex ? 'bg-black' : 'bg-zinc-300'}`}
+                  className={switchTrackClass(isFlex)}
                 >
-                  <span
-                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
-                      isFlex ? 'left-[14px]' : 'left-0.5'
-                    }`}
-                  />
+                  <span className={switchThumbClass(isFlex)} />
                 </button>
               </div>
 
@@ -1086,6 +1127,19 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
             <section className="space-y-4 border-b border-zinc-200 pb-5">
               <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Limits</p>
 
+              <div className="flex items-center gap-3">
+                <span className={`flex-1 ${tinyLabelClass()}`}>Clip content to limits</span>
+                <button
+                  type="button"
+                  onClick={handleClipContentToggle}
+                  className={switchTrackClass(clipsContent)}
+                  aria-pressed={clipsContent}
+                  aria-label="Clip content to radius"
+                >
+                  <span className={switchThumbClass(clipsContent)} />
+                </button>
+              </div>
+
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3">
                   <span className={tinyLabelClass()}>Padding</span>
@@ -1128,33 +1182,33 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   ) : (
                     <>
                       <PaddingField
-                        value={getTokenValue(paddingLeftClass, 'pl')}
+                        value={formatPaddingValueForInput(getTokenValue(paddingLeftClass, 'pl'))}
                         onChange={(value) => handlePaddingValueChange(/^pl-.+$/, 'pl', value)}
-                        hasValue={Boolean(getTokenValue(paddingLeftClass, 'pl'))}
+                        hasValue={Boolean(formatPaddingValueForInput(getTokenValue(paddingLeftClass, 'pl')))}
                         placeholder="none"
                         ariaLabel="Padding Left"
                         markers={['pl']}
                       />
                       <PaddingField
-                        value={getTokenValue(paddingTopClass, 'pt')}
+                        value={formatPaddingValueForInput(getTokenValue(paddingTopClass, 'pt'))}
                         onChange={(value) => handlePaddingValueChange(/^pt-.+$/, 'pt', value)}
-                        hasValue={Boolean(getTokenValue(paddingTopClass, 'pt'))}
+                        hasValue={Boolean(formatPaddingValueForInput(getTokenValue(paddingTopClass, 'pt')))}
                         placeholder="none"
                         ariaLabel="Padding Top"
                         markers={['pt']}
                       />
                       <PaddingField
-                        value={getTokenValue(paddingRightClass, 'pr')}
+                        value={formatPaddingValueForInput(getTokenValue(paddingRightClass, 'pr'))}
                         onChange={(value) => handlePaddingValueChange(/^pr-.+$/, 'pr', value)}
-                        hasValue={Boolean(getTokenValue(paddingRightClass, 'pr'))}
+                        hasValue={Boolean(formatPaddingValueForInput(getTokenValue(paddingRightClass, 'pr')))}
                         placeholder="none"
                         ariaLabel="Padding Right"
                         markers={['pr']}
                       />
                       <PaddingField
-                        value={getTokenValue(paddingBottomClass, 'pb')}
+                        value={formatPaddingValueForInput(getTokenValue(paddingBottomClass, 'pb'))}
                         onChange={(value) => handlePaddingValueChange(/^pb-.+$/, 'pb', value)}
-                        hasValue={Boolean(getTokenValue(paddingBottomClass, 'pb'))}
+                        hasValue={Boolean(formatPaddingValueForInput(getTokenValue(paddingBottomClass, 'pb')))}
                         placeholder="none"
                         ariaLabel="Padding Bottom"
                         markers={['pb']}
@@ -1238,25 +1292,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                     </>
                   )}
                 </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className={`flex-1 ${tinyLabelClass()}`}>Clip content to limits</span>
-                <button
-                  type="button"
-                  onClick={handleClipContentToggle}
-                  className={`relative h-5 w-8 rounded-full transition ${
-                    clipsContent ? 'bg-black' : 'bg-zinc-300'
-                  }`}
-                  aria-pressed={clipsContent}
-                  aria-label="Clip content to radius"
-                >
-                  <span
-                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
-                      clipsContent ? 'left-[14px]' : 'left-0.5'
-                    }`}
-                  />
-                </button>
               </div>
 
               <div className="space-y-3">
@@ -1374,6 +1409,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   )}
                 </div>
               </div>
+
             </section>
 
             <section className="space-y-4 border-b border-zinc-200 pb-5">
