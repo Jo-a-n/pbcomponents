@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentGroup } from '@/lib/component-selection/types'
 
 type StyleValue = string | string[]
@@ -8,6 +8,16 @@ type Styles = Record<string, StyleValue>
 type PaddingMode = 'axes' | 'sides'
 type PaddingAxis = 'x' | 'y'
 type PaddingMarker = 'pl' | 'pr' | 'pt' | 'pb'
+type RawEditorCategory =
+  | 'padding'
+  | 'margin'
+  | 'limits'
+  | 'flex'
+  | 'text'
+  | 'background'
+  | 'border'
+  | 'effects'
+  | 'other'
 
 interface StyleEditorProps {
   selectedComponent: string | null
@@ -21,6 +31,37 @@ const DIRECTION_OPTIONS = [
 ] as const
 
 const BORDER_WEIGHT_OPTIONS = ['border', 'border-0', 'border-2', 'border-4'] as const
+const PADDING_TOKEN_PATTERN = /^(p|px|py|pl|pr|pt|pb)-.+$/
+const MARGIN_TOKEN_PATTERN = /^(m|mx|my|ml|mr|mt|mb|ms|me)-.+$/
+const LIMITS_TOKEN_PATTERN =
+  /^(rounded(?:-[a-z]+)?(?:-.+)?|w-.+|h-.+|min-w-.+|max-w-.+|min-h-.+|max-h-.+|size-.+|basis-.+)$/
+const FLEX_TOKEN_PATTERN =
+  /^(flex|inline-flex|grid|inline-grid|flex-(?:row|col|wrap|nowrap|1|auto|initial|none)|grid-cols-.+|grid-rows-.+|col-.+|row-.+|auto-cols-.+|auto-rows-.+|items-.+|justify-.+|content-.+|self-.+|place-(?:items|content|self)-.+|gap(?:-[xy])?-.+|grow(?:-.+)?|shrink(?:-.+)?|order-.+)$/
+const TEXT_TOKEN_PATTERN =
+  /^(text-.+|font-.+|leading-.+|tracking-.+|whitespace-.+|break-.+|truncate|line-clamp-.+|uppercase|lowercase|capitalize|normal-case|italic|not-italic|antialiased|subpixel-antialiased|underline|overline|line-through|no-underline|decoration-.+|underline-offset-.+)$/
+const BACKGROUND_TOKEN_PATTERN =
+  /^(bg-(?!clip-padding$).+|from-.+|via-.+|to-.+)$/
+const BORDER_TOKEN_PATTERN =
+  /^(border(?:-[trblxy])?(?:-.+)?|divide(?:-[xy])?(?:-.+)?|outline(?:-.+)?)$/
+const EFFECTS_TOKEN_PATTERN =
+  /^(ring(?:-[trblxy])?(?:-.+)?|shadow(?:-.+)?|opacity-.+|mix-blend-.+|bg-blend-.+|blur(?:-.+)?|backdrop-.+)$/
+
+const RAW_EDITOR_GROUPS: Array<{
+  key: RawEditorCategory
+  label: string
+  placeholder: string
+  pattern: RegExp | null
+}> = [
+  { key: 'padding', label: 'Padding', placeholder: 'px-4 py-2', pattern: PADDING_TOKEN_PATTERN },
+  { key: 'margin', label: 'Margin', placeholder: 'mt-4 mx-auto', pattern: MARGIN_TOKEN_PATTERN },
+  { key: 'limits', label: 'Limits & Corners', placeholder: 'rounded-xl max-w-sm h-fit', pattern: LIMITS_TOKEN_PATTERN },
+  { key: 'flex', label: 'Flex', placeholder: 'flex items-center justify-between gap-4', pattern: FLEX_TOKEN_PATTERN },
+  { key: 'text', label: 'Text', placeholder: 'text-sm font-medium leading-5 text-zinc-700', pattern: TEXT_TOKEN_PATTERN },
+  { key: 'background', label: 'Background', placeholder: 'bg-white from-zinc-50 to-zinc-100', pattern: BACKGROUND_TOKEN_PATTERN },
+  { key: 'border', label: 'Border', placeholder: 'border border-zinc-200 outline-none', pattern: BORDER_TOKEN_PATTERN },
+  { key: 'effects', label: 'Effects', placeholder: 'shadow-sm ring-1 ring-zinc-200', pattern: EFFECTS_TOKEN_PATTERN },
+  { key: 'other', label: 'Other classes', placeholder: 'relative overflow-hidden transition', pattern: null },
+] as const
 
 function componentNameToFileName(componentName: string) {
   const generatedMatch = componentName.match(/^Div(\d{3})$/)
@@ -61,6 +102,13 @@ function toClassTokens(value: StyleValue | undefined) {
     .filter(Boolean)
 }
 
+function tokenizeClassInput(value: string) {
+  return value
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+}
+
 function fromClassTokens(tokens: string[], originalValue: StyleValue | undefined): StyleValue {
   const normalized = Array.from(new Set(tokens.filter(Boolean)))
   if (Array.isArray(originalValue)) {
@@ -75,6 +123,25 @@ function findToken(tokens: string[], pattern: RegExp) {
 
 function replaceTokens(tokens: string[], pattern: RegExp, nextTokens: string[]) {
   return [...tokens.filter((token) => !pattern.test(token)), ...nextTokens.filter(Boolean)]
+}
+
+function categoryPattern(category: RawEditorCategory) {
+  return RAW_EDITOR_GROUPS.find((group) => group.key === category)?.pattern ?? null
+}
+
+function tokenMatchesCategory(token: string, category: RawEditorCategory) {
+  const pattern = categoryPattern(category)
+  if (category === 'other') {
+    return RAW_EDITOR_GROUPS
+      .filter((group) => group.key !== 'other')
+      .every((group) => !group.pattern?.test(token))
+  }
+
+  return pattern?.test(token) ?? false
+}
+
+function getCategoryText(tokens: string[], category: RawEditorCategory) {
+  return tokens.filter((token) => tokenMatchesCategory(token, category)).join(' ')
 }
 
 function getTokenValue(token: string, prefix: string) {
@@ -198,12 +265,65 @@ function PaddingField({
   )
 }
 
+function RawClassTextarea({
+  label,
+  value,
+  onChange,
+  onFocus,
+  onBlur,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  onFocus: () => void
+  onBlur: () => void
+  placeholder: string
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = '0px'
+    textarea.style.height = `${textarea.scrollHeight}px`
+  }, [value])
+
+  return (
+    <label className="block space-y-1">
+      <span className={tinyLabelClass()}>{label}</span>
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        rows={1}
+        className="min-h-[46px] w-full overflow-hidden resize-none rounded-2xl bg-zinc-50 px-3 py-3 font-mono text-xs text-zinc-700 outline-none ring-1 ring-zinc-200"
+        placeholder={placeholder}
+      />
+    </label>
+  )
+}
+
 export function StyleEditor({ selectedComponent, components }: StyleEditorProps) {
   const [styles, setStyles] = useState<Styles>({})
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState('')
   const [paddingModeOverride, setPaddingModeOverride] = useState<PaddingMode | null>(null)
+  const [rawClassDrafts, setRawClassDrafts] = useState<Record<RawEditorCategory, string>>({
+    padding: '',
+    margin: '',
+    limits: '',
+    flex: '',
+    text: '',
+    background: '',
+    border: '',
+    effects: '',
+    other: '',
+  })
+  const [activeRawEditor, setActiveRawEditor] = useState<RawEditorCategory | null>(null)
 
   const breadcrumb = getBreadcrumb(selectedComponent, components)
   const selectedGroup = useMemo(
@@ -216,7 +336,17 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     () => toClassTokens(selectedStyleValue),
     [selectedStyleValue]
   )
-  const classText = classTokens.join(' ')
+  const rawCategoryTexts = useMemo(
+    () =>
+      RAW_EDITOR_GROUPS.reduce(
+        (acc, group) => {
+          acc[group.key] = getCategoryText(classTokens, group.key)
+          return acc
+        },
+        {} as Record<RawEditorCategory, string>
+      ),
+    [classTokens]
+  )
   const widthMode = guessSizeMode(classTokens, 'w')
   const heightMode = guessSizeMode(classTokens, 'h')
   const directionMode = guessDirection(classTokens)
@@ -287,6 +417,24 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     setPaddingModeOverride(null)
   }, [selectedComponent])
 
+  useEffect(() => {
+    setRawClassDrafts((prev) => {
+      let changed = false
+      const nextDrafts = { ...prev }
+
+      RAW_EDITOR_GROUPS.forEach((group) => {
+        if (activeRawEditor === group.key) return
+        const nextValue = rawCategoryTexts[group.key]
+        if (nextDrafts[group.key] !== nextValue) {
+          nextDrafts[group.key] = nextValue
+          changed = true
+        }
+      })
+
+      return changed ? nextDrafts : prev
+    })
+  }, [activeRawEditor, rawCategoryTexts])
+
   const updateSelectedStyle = (nextTokens: string[]) => {
     if (!selectedComponent) return
 
@@ -301,14 +449,16 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     updateSelectedStyle(nextTokens)
   }
 
-  const handleRawClassChange = (value: string) => {
-    if (!selectedComponent) return
+  const handleRawCategoryChange = (category: RawEditorCategory, value: string) => {
+    setRawClassDrafts((prev) => ({ ...prev, [category]: value }))
 
-    const nextTokens = value
-      .split(/\s+/)
-      .map((token) => token.trim())
-      .filter(Boolean)
-
+    const nextCategoryTokens = tokenizeClassInput(value).filter((token) =>
+      tokenMatchesCategory(token, category)
+    )
+    const nextTokens = [
+      ...classTokens.filter((token) => !tokenMatchesCategory(token, category)),
+      ...nextCategoryTokens,
+    ]
     updateSelectedStyle(nextTokens)
   }
 
@@ -734,15 +884,17 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
             </section>
 
             <section className="space-y-2 border-t border-zinc-200 pt-5">
-              <label className="block space-y-1">
-                <span className={tinyLabelClass()}>Advanced classes</span>
-                <textarea
-                  value={classText}
-                  onChange={(event) => handleRawClassChange(event.target.value)}
-                  className="h-28 w-full resize-none rounded-2xl bg-zinc-50 px-3 py-3 font-mono text-xs text-zinc-700 outline-none ring-1 ring-zinc-200"
-                  placeholder="flex gap-4 rounded-xl"
+              {RAW_EDITOR_GROUPS.map((group) => (
+                <RawClassTextarea
+                  key={group.key}
+                  label={group.label}
+                  value={activeRawEditor === group.key ? rawClassDrafts[group.key] : rawCategoryTexts[group.key]}
+                  onChange={(value) => handleRawCategoryChange(group.key, value)}
+                  onFocus={() => setActiveRawEditor(group.key)}
+                  onBlur={() => setActiveRawEditor(null)}
+                  placeholder={group.placeholder}
                 />
-              </label>
+              ))}
 
               <button
                 onClick={handleSave}
