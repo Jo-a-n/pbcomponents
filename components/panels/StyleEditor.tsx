@@ -8,6 +8,8 @@ type Styles = Record<string, StyleValue>
 type PaddingMode = 'axes' | 'sides'
 type PaddingAxis = 'x' | 'y'
 type PaddingMarker = 'pl' | 'pr' | 'pt' | 'pb'
+type CornerRadiusMode = 'linked' | 'independent'
+type FullCornerKey = 'tl' | 'tr' | 'bl' | 'br'
 type RawEditorCategory =
   | 'padding'
   | 'margin'
@@ -33,8 +35,9 @@ const DIRECTION_OPTIONS = [
 const BORDER_WEIGHT_OPTIONS = ['border', 'border-0', 'border-2', 'border-4'] as const
 const PADDING_TOKEN_PATTERN = /^(p|px|py|pl|pr|pt|pb)-.+$/
 const MARGIN_TOKEN_PATTERN = /^(m|mx|my|ml|mr|mt|mb|ms|me)-.+$/
+const RADIUS_TOKEN_PATTERN = /^rounded(?:-(?:tl|tr|br|bl|t|r|b|l))?(?:-.+)?$/
 const LIMITS_TOKEN_PATTERN =
-  /^(rounded(?:-[a-z]+)?(?:-.+)?|w-.+|h-.+|min-w-.+|max-w-.+|min-h-.+|max-h-.+|size-.+|basis-.+)$/
+  /^(rounded(?:-(?:tl|tr|br|bl|t|r|b|l))?(?:-.+)?|w-.+|h-.+|min-w-.+|max-w-.+|min-h-.+|max-h-.+|size-.+|basis-.+)$/
 const FLEX_TOKEN_PATTERN =
   /^(flex|inline-flex|grid|inline-grid|flex-(?:row|col|wrap|nowrap|1|auto|initial|none)|grid-cols-.+|grid-rows-.+|col-.+|row-.+|auto-cols-.+|auto-rows-.+|items-.+|justify-.+|content-.+|self-.+|place-(?:items|content|self)-.+|gap(?:-[xy])?-.+|grow(?:-.+)?|shrink(?:-.+)?|order-.+)$/
 const TEXT_TOKEN_PATTERN =
@@ -152,6 +155,49 @@ function guessPaddingMode(tokens: string[]): PaddingMode {
   return tokens.some((token) => /^(pl|pr|pt|pb)-.+$/.test(token)) ? 'sides' : 'axes'
 }
 
+function parseRoundedToken(token: string) {
+  const match = token.match(/^rounded(?:-(tl|tr|br|bl|t|r|b|l))?(?:-(.+))?$/)
+  if (!match) return null
+
+  return {
+    corner: (match[1] ?? 'all') as 'all' | 't' | 'r' | 'b' | 'l' | FullCornerKey,
+    value: match[2] ?? '',
+  }
+}
+
+function formatRadiusValueForInput(value: string) {
+  const arbitraryValueMatch = value.match(/^\[(.+)\]$/)
+  return arbitraryValueMatch ? arbitraryValueMatch[1] : value
+}
+
+function normalizeRadiusValue(value: string) {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) return ''
+  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
+  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
+  return trimmedValue
+}
+
+function getRoundedValue(tokens: string[], target: 'all' | 't' | 'r' | 'b' | 'l' | FullCornerKey) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const parsedToken = parseRoundedToken(tokens[index])
+    if (parsedToken?.corner === target) {
+      return formatRadiusValueForInput(parsedToken.value)
+    }
+  }
+
+  return undefined
+}
+
+function guessCornerRadiusMode(tokens: string[]): CornerRadiusMode {
+  return tokens.some((token) => {
+    const parsedToken = parseRoundedToken(token)
+    return parsedToken != null && ['tl', 'tr', 'bl', 'br'].includes(parsedToken.corner)
+  })
+    ? 'independent'
+    : 'linked'
+}
+
 function parsePairedValue(value: string) {
   return value
     .split(',')
@@ -233,20 +279,40 @@ function paddingFieldInputClass(hasValue: boolean, markers: PaddingMarker[]) {
 function PaddingField({
   value,
   onChange,
+  selectOnFocus = false,
   hasValue,
+  muted = false,
+  cornerCue,
   placeholder,
   ariaLabel,
   markers,
 }: {
   value: string
   onChange: (value: string) => void
+  selectOnFocus?: boolean
   hasValue: boolean
+  muted?: boolean
+  cornerCue?: FullCornerKey
   placeholder: string
   ariaLabel: string
   markers: PaddingMarker[]
 }) {
   return (
     <div className="relative">
+      {cornerCue && (
+        <span
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-0 rounded-lg border-transparent ${
+            cornerCue === 'tl'
+              ? 'border-l-2 border-t-2 border-l-gray-300 border-t-gray-300'
+              : cornerCue === 'tr'
+                ? 'border-r-2 border-t-2 border-r-gray-300 border-t-gray-300'
+                : cornerCue === 'bl'
+                  ? 'border-b-2 border-l-2 border-b-gray-300 border-l-gray-300'
+                  : 'border-b-2 border-r-2 border-b-gray-300 border-r-gray-300'
+          }`}
+        />
+      )}
       {markers.map((marker) => (
         <span
           key={marker}
@@ -257,7 +323,12 @@ function PaddingField({
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={paddingFieldInputClass(hasValue, markers)}
+        onFocus={(event) => {
+          if (selectOnFocus) {
+            event.currentTarget.select()
+          }
+        }}
+        className={`${paddingFieldInputClass(hasValue, markers)} ${muted ? 'text-black/40' : 'text-black'}`}
         placeholder={placeholder}
         aria-label={ariaLabel}
       />
@@ -312,6 +383,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState('')
   const [paddingModeOverride, setPaddingModeOverride] = useState<PaddingMode | null>(null)
+  const [cornerRadiusModeOverride, setCornerRadiusModeOverride] = useState<CornerRadiusMode | null>(null)
   const [rawClassDrafts, setRawClassDrafts] = useState<Record<RawEditorCategory, string>>({
     padding: '',
     margin: '',
@@ -351,6 +423,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const heightMode = guessSizeMode(classTokens, 'h')
   const directionMode = guessDirection(classTokens)
   const isFlex = guessToggle(classTokens, 'flex')
+  const clipsContent = classTokens.includes('overflow-hidden') || classTokens.includes('overflow-clip')
   const gapClass = findToken(classTokens, /^gap-.+/)
   const backgroundClass = findToken(classTokens, /^bg-(?!clip-padding$).+/)
   const borderColorClass = findToken(
@@ -358,7 +431,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/
   )
   const borderWeightClass = findToken(classTokens, /^border(?:-(?:0|2|4|8))?$/) || 'border'
-  const radiusClass = findToken(classTokens, /^rounded(?:-[a-z]+)?(?:-.+)?$/)
   const widthClass = findToken(classTokens, /^(w-.+|basis-.+|flex-1)$/)
   const heightClass = findToken(classTokens, /^h-.+/)
   const paddingXClass = findToken(classTokens, /^px-.+/)
@@ -374,6 +446,33 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const paddingBottomValue = getTokenValue(paddingBottomClass, 'pb') || getTokenValue(paddingYClass, 'py')
   const paddingAxisXValue = formatAxisValue(paddingLeftValue, paddingRightValue)
   const paddingAxisYValue = formatAxisValue(paddingTopValue, paddingBottomValue)
+  const cornerRadiusMode = cornerRadiusModeOverride ?? guessCornerRadiusMode(classTokens)
+  const radiusAllValue = getRoundedValue(classTokens, 'all')
+  const radiusTopValue = getRoundedValue(classTokens, 't')
+  const radiusRightValue = getRoundedValue(classTokens, 'r')
+  const radiusBottomValue = getRoundedValue(classTokens, 'b')
+  const radiusLeftValue = getRoundedValue(classTokens, 'l')
+  const radiusTopLeftValue =
+    getRoundedValue(classTokens, 'tl') ?? radiusTopValue ?? radiusLeftValue ?? radiusAllValue ?? ''
+  const radiusTopRightValue =
+    getRoundedValue(classTokens, 'tr') ?? radiusTopValue ?? radiusRightValue ?? radiusAllValue ?? ''
+  const radiusBottomLeftValue =
+    getRoundedValue(classTokens, 'bl') ?? radiusBottomValue ?? radiusLeftValue ?? radiusAllValue ?? ''
+  const radiusBottomRightValue =
+    getRoundedValue(classTokens, 'br') ?? radiusBottomValue ?? radiusRightValue ?? radiusAllValue ?? ''
+  const radiusLinkedValue = radiusAllValue ?? radiusTopLeftValue
+  const hasExplicitCornerRadius = classTokens.some((token) => /^rounded-(tl|tr|bl|br)-.+$/.test(token))
+  const linkedShowsVarious =
+    hasExplicitCornerRadius ||
+    radiusTopLeftValue !== radiusTopRightValue ||
+    radiusTopLeftValue !== radiusBottomLeftValue ||
+    radiusTopLeftValue !== radiusBottomRightValue
+  const radiusLinkedDisplayValue = linkedShowsVarious ? 'Varies (Independent)' : radiusLinkedValue
+  const independentGhostedCorners = {
+    tr: !getRoundedValue(classTokens, 'tr') && Boolean(radiusAllValue),
+    bl: !getRoundedValue(classTokens, 'bl') && Boolean(radiusAllValue),
+    br: !getRoundedValue(classTokens, 'br') && Boolean(radiusAllValue),
+  }
 
   useEffect(() => {
     if (!selectedFileName) {
@@ -415,6 +514,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
   useEffect(() => {
     setPaddingModeOverride(null)
+    setCornerRadiusModeOverride(null)
   }, [selectedComponent])
 
   useEffect(() => {
@@ -467,6 +567,14 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
       ? classTokens.filter((token) => token !== 'flex' && token !== 'flex-row' && token !== 'flex-col')
       : [...classTokens, 'flex', directionMode === 'col' ? 'flex-col' : 'flex-row']
     updateSelectedStyle(nextTokens)
+  }
+
+  const handleClipContentToggle = () => {
+    updateSelectedStyle(
+      clipsContent
+        ? classTokens.filter((token) => token !== 'overflow-hidden' && token !== 'overflow-clip')
+        : replaceTokens(classTokens, /^overflow-(hidden|clip)$/, ['overflow-hidden'])
+    )
   }
 
   const handleDirectionChange = (nextDirection: 'row' | 'col' | 'grid') => {
@@ -537,6 +645,46 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     setPaddingModeOverride(nextMode)
   }
 
+  const getExplicitCornerRadiusTokens = (nextValues: Record<FullCornerKey, string>) => {
+    const orderedCorners: FullCornerKey[] = ['tl', 'tr', 'bl', 'br']
+
+    return orderedCorners.flatMap((corner) => {
+      const normalizedValue = normalizeRadiusValue(nextValues[corner])
+      return normalizedValue ? [`rounded-${corner}-${normalizedValue}`] : []
+    })
+  }
+
+  const handleCornerRadiusLinkedChange = (nextValue: string) => {
+    const nextLinkedValue =
+      linkedShowsVarious && nextValue.startsWith('Various')
+        ? nextValue.slice('Various'.length).trimStart()
+        : nextValue
+    const normalizedValue = normalizeRadiusValue(nextLinkedValue)
+    updateSelectedStyle(
+      replaceTokens(classTokens, RADIUS_TOKEN_PATTERN, normalizedValue ? [`rounded-${normalizedValue}`] : [])
+    )
+  }
+
+  const handleCornerRadiusValueChange = (corner: FullCornerKey, nextValue: string) => {
+    const nextValues = {
+      tl: radiusTopLeftValue,
+      tr: radiusTopRightValue,
+      bl: radiusBottomLeftValue,
+      br: radiusBottomRightValue,
+      [corner]: nextValue,
+    } satisfies Record<FullCornerKey, string>
+
+    updateSelectedStyle(
+      replaceTokens(classTokens, RADIUS_TOKEN_PATTERN, getExplicitCornerRadiusTokens(nextValues))
+    )
+  }
+
+  const handleCornerRadiusModeChange = (nextMode: CornerRadiusMode) => {
+    if (nextMode === cornerRadiusMode) return
+
+    setCornerRadiusModeOverride(nextMode)
+  }
+
   const normalizePaddingTokensForSave = () => {
     if (paddingMode !== 'axes') return classTokens
 
@@ -548,10 +696,31 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     return replaceTokens(classTokens, /^(px|py|pl|pr|pt|pb)-.+$/, nextPaddingTokens)
   }
 
+  const normalizeCornerRadiusTokensForSave = (tokens: string[]) => {
+    if (cornerRadiusMode === 'linked') {
+      return replaceTokens(
+        tokens,
+        RADIUS_TOKEN_PATTERN,
+        normalizeRadiusValue(radiusLinkedValue) ? [`rounded-${normalizeRadiusValue(radiusLinkedValue)}`] : []
+      )
+    }
+
+    return replaceTokens(
+      tokens,
+      RADIUS_TOKEN_PATTERN,
+      getExplicitCornerRadiusTokens({
+        tl: radiusTopLeftValue,
+        tr: radiusTopRightValue,
+        bl: radiusBottomLeftValue,
+        br: radiusBottomRightValue,
+      })
+    )
+  }
+
   const handleSave = async () => {
     if (!selectedFileName || !selectedComponent) return
 
-    const nextTokens = normalizePaddingTokensForSave()
+    const nextTokens = normalizeCornerRadiusTokensForSave(normalizePaddingTokensForSave())
 
     setIsSaving(true)
     setSaveMessage('')
@@ -789,13 +958,98 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               </div>
 
               <div className="space-y-1">
-                <span className={tinyLabelClass()}>Corner radius</span>
-                <input
-                  value={radiusClass}
-                  onChange={(event) => updateSingleField(/^rounded(?:-[a-z]+)?(?:-.+)?$/, event.target.value)}
-                  className="h-6 w-full rounded-lg bg-gray-100 px-3 text-[12px] font-medium outline-none"
-                  placeholder="rounded-xl"
-                />
+                <div className="flex items-center justify-between gap-3">
+                  <span className={tinyLabelClass()}>Corner radius</span>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1">
+                    {(['linked', 'independent'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => handleCornerRadiusModeChange(mode)}
+                        className={`rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                          cornerRadiusMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
+                        }`}
+                      >
+                        {mode === 'linked' ? 'Linked' : 'Independent'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className={cornerRadiusMode === 'linked' ? 'grid grid-cols-2 gap-x-3 gap-y-1' : 'grid grid-cols-2 gap-x-3 gap-y-1'}>
+                  {cornerRadiusMode === 'linked' ? (
+                    <PaddingField
+                      value={radiusLinkedDisplayValue}
+                      onChange={handleCornerRadiusLinkedChange}
+                      selectOnFocus={linkedShowsVarious}
+                      hasValue={Boolean(radiusLinkedDisplayValue)}
+                      placeholder="none"
+                      ariaLabel="Corner radius all"
+                      markers={[]}
+                    />
+                  ) : (
+                    <>
+                      <PaddingField
+                        value={radiusTopLeftValue}
+                        onChange={(value) => handleCornerRadiusValueChange('tl', value)}
+                        hasValue={Boolean(radiusTopLeftValue)}
+                        cornerCue="tl"
+                        placeholder="none"
+                        ariaLabel="Corner radius top left"
+                        markers={[]}
+                      />
+                      <PaddingField
+                        value={radiusTopRightValue}
+                        onChange={(value) => handleCornerRadiusValueChange('tr', value)}
+                        hasValue={Boolean(radiusTopRightValue)}
+                        muted={independentGhostedCorners.tr}
+                        cornerCue="tr"
+                        placeholder="none"
+                        ariaLabel="Corner radius top right"
+                        markers={[]}
+                      />
+                      <PaddingField
+                        value={radiusBottomLeftValue}
+                        onChange={(value) => handleCornerRadiusValueChange('bl', value)}
+                        hasValue={Boolean(radiusBottomLeftValue)}
+                        muted={independentGhostedCorners.bl}
+                        cornerCue="bl"
+                        placeholder="none"
+                        ariaLabel="Corner radius bottom left"
+                        markers={[]}
+                      />
+                      <PaddingField
+                        value={radiusBottomRightValue}
+                        onChange={(value) => handleCornerRadiusValueChange('br', value)}
+                        hasValue={Boolean(radiusBottomRightValue)}
+                        muted={independentGhostedCorners.br}
+                        cornerCue="br"
+                        placeholder="none"
+                        ariaLabel="Corner radius bottom right"
+                        markers={[]}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className={`flex-1 ${tinyLabelClass()}`}>Clip content to limits</span>
+                <button
+                  type="button"
+                  onClick={handleClipContentToggle}
+                  className={`relative h-5 w-8 rounded-full transition ${
+                    clipsContent ? 'bg-black' : 'bg-zinc-300'
+                  }`}
+                  aria-pressed={clipsContent}
+                  aria-label="Clip content to radius"
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${
+                      clipsContent ? 'left-[14px]' : 'left-0.5'
+                    }`}
+                  />
+                </button>
               </div>
 
               <label className="flex items-center gap-2">
