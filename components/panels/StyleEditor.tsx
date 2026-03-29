@@ -10,6 +10,9 @@ type PaddingAxis = 'x' | 'y'
 type PaddingMarker = 'pl' | 'pr' | 'pt' | 'pb'
 type CornerRadiusMode = 'linked' | 'independent'
 type FullCornerKey = 'tl' | 'tr' | 'bl' | 'br'
+type LimitAxis = 'width' | 'height'
+type LimitKind = 'min' | 'max'
+type LimitFieldKey = `${LimitAxis}-${LimitKind}`
 type RawEditorCategory =
   | 'padding'
   | 'margin'
@@ -151,6 +154,44 @@ function getTokenValue(token: string, prefix: string) {
   return token.startsWith(`${prefix}-`) ? token.slice(prefix.length + 1) : ''
 }
 
+function getLimitTokenValue(token: string, prefix: 'min-w' | 'max-w' | 'min-h' | 'max-h') {
+  if (!token.startsWith(`${prefix}-`)) return ''
+
+  const value = token.slice(prefix.length + 1)
+  const arbitraryValueMatch = value.match(/^\[(.+)\]$/)
+  return arbitraryValueMatch ? arbitraryValueMatch[1] : value
+}
+
+function normalizeLimitValue(value: string) {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) return ''
+  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
+  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
+  return trimmedValue
+}
+
+function parseComparableLengthValue(value: string) {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) return null
+
+  const unwrappedValue = trimmedValue.match(/^\[(.+)\]$/)?.[1] ?? trimmedValue
+  const spacingScaleMatch = unwrappedValue.match(/^-?\d*\.?\d+$/)
+  if (spacingScaleMatch) {
+    return {
+      amount: Number(unwrappedValue),
+      unit: 'tailwind-spacing',
+    }
+  }
+
+  const match = unwrappedValue.match(/^(-?\d*\.?\d+)(px|rem|em|%|vw|vh)$/)
+  if (!match) return null
+
+  return {
+    amount: Number(match[1]),
+    unit: match[2],
+  }
+}
+
 function guessPaddingMode(tokens: string[]): PaddingMode {
   return tokens.some((token) => /^(pl|pr|pt|pb)-.+$/.test(token)) ? 'sides' : 'axes'
 }
@@ -225,6 +266,12 @@ function guessSizeMode(tokens: string[], axis: 'w' | 'h') {
   return 'Fixed'
 }
 
+function sizeModeLabel(mode: 'Fill' | 'Hug' | 'Fixed', axis: 'w' | 'h') {
+  if (mode === 'Fill') return axis === 'w' ? 'Fill (w-full)' : 'Fill (h-full)'
+  if (mode === 'Hug') return axis === 'w' ? 'Hug (w-fit)' : 'Hug (h-fit)'
+  return 'Fixed (manual)'
+}
+
 function guessDirection(tokens: string[]) {
   if (tokens.includes('grid')) return 'grid'
   if (tokens.includes('flex-col')) return 'col'
@@ -274,6 +321,10 @@ function paddingFieldInputClass(hasValue: boolean, markers: PaddingMarker[]) {
   const verticalPadding = hasVerticalMarkers ? 'py-[5px]' : ''
 
   return [base, horizontalPadding, verticalPadding].filter(Boolean).join(' ')
+}
+
+function limitFieldKey(axis: LimitAxis, kind: LimitKind): LimitFieldKey {
+  return `${axis}-${kind}`
 }
 
 function PaddingField({
@@ -336,6 +387,44 @@ function PaddingField({
   )
 }
 
+function LimitValueField({
+  label,
+  value,
+  onChange,
+  onClear,
+  placeholder,
+  ariaLabel,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  onClear: () => void
+  placeholder: string
+  ariaLabel: string
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`w-16 shrink-0 ${tinyLabelClass()}`}>{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-6 flex-1 rounded-lg bg-gray-100 px-3 text-[12px] font-medium text-black outline-none"
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+      />
+      <button
+        type="button"
+        onClick={onClear}
+        className="flex h-6 w-6 items-center justify-center rounded-lg bg-gray-100 text-xs font-semibold text-zinc-500 transition hover:text-black"
+        aria-label={`Remove ${ariaLabel}`}
+        title={`Remove ${ariaLabel}`}
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
 function RawClassTextarea({
   label,
   value,
@@ -384,6 +473,13 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const [saveMessage, setSaveMessage] = useState('')
   const [paddingModeOverride, setPaddingModeOverride] = useState<PaddingMode | null>(null)
   const [cornerRadiusModeOverride, setCornerRadiusModeOverride] = useState<CornerRadiusMode | null>(null)
+  const [visibleLimitFields, setVisibleLimitFields] = useState<Record<LimitFieldKey, boolean>>({
+    'width-min': false,
+    'width-max': false,
+    'height-min': false,
+    'height-max': false,
+  })
+  const [activeLimitMenu, setActiveLimitMenu] = useState<LimitAxis | null>(null)
   const [rawClassDrafts, setRawClassDrafts] = useState<Record<RawEditorCategory, string>>({
     padding: '',
     margin: '',
@@ -433,6 +529,21 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const borderWeightClass = findToken(classTokens, /^border(?:-(?:0|2|4|8))?$/) || 'border'
   const widthClass = findToken(classTokens, /^(w-.+|basis-.+|flex-1)$/)
   const heightClass = findToken(classTokens, /^h-.+/)
+  const minWidthClass = findToken(classTokens, /^min-w-.+/)
+  const maxWidthClass = findToken(classTokens, /^max-w-.+/)
+  const minHeightClass = findToken(classTokens, /^min-h-.+/)
+  const maxHeightClass = findToken(classTokens, /^max-h-.+/)
+  const minWidthValue = getLimitTokenValue(minWidthClass, 'min-w')
+  const maxWidthValue = getLimitTokenValue(maxWidthClass, 'max-w')
+  const minHeightValue = getLimitTokenValue(minHeightClass, 'min-h')
+  const maxHeightValue = getLimitTokenValue(maxHeightClass, 'max-h')
+  const comparableMinWidthValue = parseComparableLengthValue(minWidthValue)
+  const comparableMaxWidthValue = parseComparableLengthValue(maxWidthValue)
+  const hasWidthLimitConflict =
+    comparableMinWidthValue != null &&
+    comparableMaxWidthValue != null &&
+    comparableMinWidthValue.unit === comparableMaxWidthValue.unit &&
+    comparableMinWidthValue.amount > comparableMaxWidthValue.amount
   const paddingXClass = findToken(classTokens, /^px-.+/)
   const paddingYClass = findToken(classTokens, /^py-.+/)
   const paddingLeftClass = findToken(classTokens, /^pl-.+/)
@@ -515,7 +626,23 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   useEffect(() => {
     setPaddingModeOverride(null)
     setCornerRadiusModeOverride(null)
+    setVisibleLimitFields({
+      'width-min': false,
+      'width-max': false,
+      'height-min': false,
+      'height-max': false,
+    })
+    setActiveLimitMenu(null)
   }, [selectedComponent])
+
+  useEffect(() => {
+    setVisibleLimitFields((prev) => ({
+      'width-min': prev['width-min'] || Boolean(minWidthClass),
+      'width-max': prev['width-max'] || Boolean(maxWidthClass),
+      'height-min': prev['height-min'] || Boolean(minHeightClass),
+      'height-max': prev['height-max'] || Boolean(maxHeightClass),
+    }))
+  }, [maxHeightClass, maxWidthClass, minHeightClass, minWidthClass])
 
   useEffect(() => {
     setRawClassDrafts((prev) => {
@@ -599,6 +726,86 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
     updateSingleField(pattern, nextValue)
   }
+
+  const showLimitField = (axis: LimitAxis, kind: LimitKind) => {
+    setVisibleLimitFields((prev) => ({ ...prev, [limitFieldKey(axis, kind)]: true }))
+    setActiveLimitMenu(null)
+  }
+
+  const hideLimitField = (axis: LimitAxis, kind: LimitKind) => {
+    const pattern =
+      axis === 'width'
+        ? kind === 'min'
+          ? /^min-w-.+$/
+          : /^max-w-.+$/
+        : kind === 'min'
+          ? /^min-h-.+$/
+          : /^max-h-.+$/
+
+    setVisibleLimitFields((prev) => ({ ...prev, [limitFieldKey(axis, kind)]: false }))
+    updateSingleField(pattern, '')
+  }
+
+  const handleLimitValueChange = (
+    axis: LimitAxis,
+    kind: LimitKind,
+    value: string
+  ) => {
+    const normalizedValue = normalizeLimitValue(value)
+    const prefix =
+      axis === 'width'
+        ? kind === 'min'
+          ? 'min-w'
+          : 'max-w'
+        : kind === 'min'
+          ? 'min-h'
+          : 'max-h'
+    const pattern =
+      axis === 'width'
+        ? kind === 'min'
+          ? /^min-w-.+$/
+          : /^max-w-.+$/
+        : kind === 'min'
+          ? /^min-h-.+$/
+          : /^max-h-.+$/
+
+    updateSingleField(pattern, normalizedValue ? `${prefix}-${normalizedValue}` : '')
+  }
+
+  const limitFieldConfig = {
+    width: {
+      min: {
+        label: 'Min',
+        value: minWidthValue,
+        pattern: /^min-w-.+$/,
+        placeholder: 'sm',
+        ariaLabel: 'Minimum width',
+      },
+      max: {
+        label: 'Max',
+        value: maxWidthValue,
+        pattern: /^max-w-.+$/,
+        placeholder: 'sm',
+        ariaLabel: 'Maximum width',
+      },
+    },
+    height: {
+      min: {
+        label: 'Min',
+        value: minHeightValue,
+        pattern: /^min-h-.+$/,
+        placeholder: '24',
+        ariaLabel: 'Minimum height',
+      },
+      max: {
+        label: 'Max',
+        value: maxHeightValue,
+        pattern: /^max-h-.+$/,
+        placeholder: '48',
+        ariaLabel: 'Maximum height',
+      },
+    },
+  } as const
 
   const handlePaddingValueChange = (
     pattern: RegExp,
@@ -800,9 +1007,9 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                       onChange={(event) => handleSizeModeChange('w', event.target.value as 'Fill' | 'Hug' | 'Fixed')}
                       className="w-full bg-transparent outline-none"
                     >
-                      <option>Fill</option>
-                      <option>Hug</option>
-                      <option>Fixed</option>
+                      <option value="Fill">{sizeModeLabel('Fill', 'w')}</option>
+                      <option value="Hug">{sizeModeLabel('Hug', 'w')}</option>
+                      <option value="Fixed">{sizeModeLabel('Fixed', 'w')}</option>
                     </select>
                   </div>
                 </label>
@@ -815,9 +1022,9 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                       onChange={(event) => handleSizeModeChange('h', event.target.value as 'Fill' | 'Hug' | 'Fixed')}
                       className="w-full bg-transparent outline-none"
                     >
-                      <option>Fill</option>
-                      <option>Hug</option>
-                      <option>Fixed</option>
+                      <option value="Fill">{sizeModeLabel('Fill', 'h')}</option>
+                      <option value="Hug">{sizeModeLabel('Hug', 'h')}</option>
+                      <option value="Fixed">{sizeModeLabel('Fixed', 'h')}</option>
                     </select>
                   </div>
                 </label>
@@ -1052,25 +1259,121 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                 </button>
               </div>
 
-              <label className="flex items-center gap-2">
-                <span className={`flex-1 ${tinyLabelClass()}`}>Width Max/Min</span>
-                <input
-                  value={widthClass}
-                  onChange={(event) => updateSingleField(/^(w-.+|basis-.+|flex-1)$/, event.target.value)}
-                  className="h-6 w-28 rounded-lg bg-gray-100 px-3 text-[12px] font-medium outline-none"
-                  placeholder="w-full"
-                />
-              </label>
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <div className="relative flex items-center gap-2">
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Width Max/Min</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveLimitMenu((prev) => (prev === 'width' ? null : 'width'))
+                      }
+                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
+                      aria-label="Add width limit"
+                      title="Add width limit"
+                    >
+                      +
+                    </button>
+                    {activeLimitMenu === 'width' && (
+                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
+                        {(['min', 'max'] as const).map((kind) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => showLimitField('width', kind)}
+                            disabled={visibleLimitFields[limitFieldKey('width', kind)]}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                          >
+                            Add {kind}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-              <label className="flex items-center gap-2">
-                <span className={`flex-1 ${tinyLabelClass()}`}>Height Max/Min</span>
-                <input
-                  value={heightClass}
-                  onChange={(event) => updateSingleField(/^h-.+$/, event.target.value)}
-                  className="h-6 w-28 rounded-lg bg-gray-100 px-3 text-[12px] font-medium outline-none"
-                  placeholder="h-fit"
-                />
-              </label>
+                  {visibleLimitFields['width-min'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.width.min.label}
+                      value={limitFieldConfig.width.min.value}
+                      onChange={(value) => handleLimitValueChange('width', 'min', value)}
+                      onClear={() => hideLimitField('width', 'min')}
+                      placeholder={limitFieldConfig.width.min.placeholder}
+                      ariaLabel={limitFieldConfig.width.min.ariaLabel}
+                    />
+                  )}
+
+                  {visibleLimitFields['width-max'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.width.max.label}
+                      value={limitFieldConfig.width.max.value}
+                      onChange={(value) => handleLimitValueChange('width', 'max', value)}
+                      onClear={() => hideLimitField('width', 'max')}
+                      placeholder={limitFieldConfig.width.max.placeholder}
+                      ariaLabel={limitFieldConfig.width.max.ariaLabel}
+                    />
+                  )}
+
+                  {hasWidthLimitConflict && (
+                    <p className="text-[10px] font-medium leading-tight text-red-500">
+                      Min width is larger than max width.
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="relative flex items-center gap-2">
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Height Max/Min</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveLimitMenu((prev) => (prev === 'height' ? null : 'height'))
+                      }
+                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
+                      aria-label="Add height limit"
+                      title="Add height limit"
+                    >
+                      +
+                    </button>
+                    {activeLimitMenu === 'height' && (
+                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
+                        {(['min', 'max'] as const).map((kind) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => showLimitField('height', kind)}
+                            disabled={visibleLimitFields[limitFieldKey('height', kind)]}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                          >
+                            Add {kind}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {visibleLimitFields['height-min'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.height.min.label}
+                      value={limitFieldConfig.height.min.value}
+                      onChange={(value) => handleLimitValueChange('height', 'min', value)}
+                      onClear={() => hideLimitField('height', 'min')}
+                      placeholder={limitFieldConfig.height.min.placeholder}
+                      ariaLabel={limitFieldConfig.height.min.ariaLabel}
+                    />
+                  )}
+
+                  {visibleLimitFields['height-max'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.height.max.label}
+                      value={limitFieldConfig.height.max.value}
+                      onChange={(value) => handleLimitValueChange('height', 'max', value)}
+                      onClear={() => hideLimitField('height', 'max')}
+                      placeholder={limitFieldConfig.height.max.placeholder}
+                      ariaLabel={limitFieldConfig.height.max.ariaLabel}
+                    />
+                  )}
+                </div>
+              </div>
             </section>
 
             <section className="space-y-4 border-b border-zinc-200 pb-5">
