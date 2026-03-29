@@ -43,3 +43,37 @@
   - `components/div-004.tsx`
   - `components/div-004.json`
   - `components/div-004.view.tsx`
+
+## 2026-03-29
+
+### Summary
+- Added structured controls for size mode, padding, corner radius, min/max limits, flex direction, gap, background, and border classes.
+- Grouped raw Tailwind class editing into categorized text areas so padding, layout, text, border, effects, and uncategorized classes can be edited separately.
+- Added token parsing/normalization helpers so arbitrary values like `12px` are preserved as Tailwind arbitrary values (for example `[12px]`) and existing class groups stay stable during edits.
+- Improved padding usability with `Axes` vs `Sides` editing and improved corner radius editing with `Linked` vs `Independent` modes.
+- Added width/height min-max controls with add/remove flows and a warning when min width exceeds max width.
+- Added placeholder badges to unfinished Style Editor controls to make partial UI areas obvious during handoff.
+- Cleaned up Component Tree styling to match the lighter current UI direction.
+- Switched the global body font to use `var(--font-geist-sans)` before falling back to Arial/Helvetica.
+
+### Commits (chronological)
+1. `3452d32` works
+2. `cbdaab6` Merge pull request #1 from Jo-a-n/pl
+3. `4919b43` complete intender padding usability, align style editor layout with figma
+4. `0535f77` Refine style editor text area edit for class grouping
+5. `1790864` Refine style editor corner radius controls and clipping
+6. `718bd98` Add min/max constraints to the style editor
+7. `2b33857` add px values to padding inputs and fix border radius field bug
+8. `80ad016` add placeholder badges to unfinished elements
+
+### Key Files Touched Today
+- `components/panels/StyleEditor.tsx`
+- `components/panels/ComponentTree.tsx`
+- `app/globals.css`
+
+### Notes For The Next Developer
+- The big change is almost entirely in `StyleEditor.tsx`; most recent work is UI polish and token-editing behavior rather than API changes.
+- The Style Editor now derives editable fields from Tailwind class tokens, then writes back merged token groups when inputs change.
+- Some inspector UI is intentionally incomplete and marked with `Placeholder` badges. The alignment matrix and some background/border affordances are visual placeholders, not fully wired controls yet.
+- Width min/max conflict detection currently only warns for comparable units.
+- The workspace is currently clean with no uncommitted changes.
