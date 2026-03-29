@@ -502,6 +502,14 @@ function RawClassTextarea({
   )
 }
 
+function PlaceholderBadge() {
+  return (
+    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-zinc-400">
+      Placeholder
+    </span>
+  )
+}
+
 export function StyleEditor({ selectedComponent, components }: StyleEditorProps) {
   const [styles, setStyles] = useState<Styles>({})
   const [isLoading, setIsLoading] = useState(false)
@@ -563,8 +571,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/
   )
   const borderWeightClass = findToken(classTokens, /^border(?:-(?:0|2|4|8))?$/) || 'border'
-  const widthClass = findToken(classTokens, /^(w-.+|basis-.+|flex-1)$/)
-  const heightClass = findToken(classTokens, /^h-.+/)
   const minWidthClass = findToken(classTokens, /^min-w-.+/)
   const maxWidthClass = findToken(classTokens, /^max-w-.+/)
   const minHeightClass = findToken(classTokens, /^min-h-.+/)
@@ -1077,9 +1083,12 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
         {selectedComponent && (
           <>
             <section className="space-y-4 border-b border-zinc-200 pb-5">
-              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">
-                Flex Direction / Grid
-              </p>
+              <div className="flex items-center gap-3 pt-1">
+                <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">
+                  Flex Direction / Grid
+                </p>
+                <PlaceholderBadge />
+              </div>
 
               <div className="grid grid-cols-3 gap-1">
                 {DIRECTION_OPTIONS.map((option) => {
@@ -1111,7 +1120,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
               <div className="space-y-1">
                 <span className={tinyLabelClass()}>Alignment</span>
-                <div className="grid grid-cols-3 gap-3 rounded-xl bg-gray-100 p-3 w-fit">
+                <div className="grid w-fit grid-cols-3 gap-3 rounded-xl bg-gray-100 p-3">
                   {Array.from({ length: 9 }, (_, index) => (
                     <div
                       key={index}
@@ -1417,6 +1426,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                 <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">
                   Background Color
                 </p>
+                <PlaceholderBadge />
                 <span className="text-2xl leading-none">+</span>
               </div>
               <div className="flex gap-1">
@@ -1436,6 +1446,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
             <section className="space-y-4">
               <div className="flex items-center gap-2 pt-1">
                 <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">Border</p>
+                <PlaceholderBadge />
                 <span className="text-2xl leading-none">+</span>
               </div>
 
