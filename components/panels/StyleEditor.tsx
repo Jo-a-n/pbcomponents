@@ -1,7 +1,25 @@
 'use client'
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import tailwindColors from 'tailwindcss/colors'
 import type { ComponentGroup } from '@/lib/component-selection/types'
+import {
+  buildBackgroundPickerDraft,
+  buildBackgroundPickerDraftFromHsl,
+  buildBackgroundPickerDraftFromRgb,
+  buildBackgroundToken,
+  clampNumber,
+  decodeTailwindArbitraryValue,
+  hslToRgb,
+  normalizeBackgroundColorValue,
+  normalizeBackgroundOpacityValue,
+  parseHexColor,
+  parseBackgroundToken,
+  parseCssColorToRgb,
+  splitTopLevelOpacitySuffix,
+  unwrapArbitraryValue,
+} from '@/lib/style-editor/background-color.mjs'
+import { tokenizeClassString } from '@/lib/style-editor/class-tokens.mjs'
 
 type StyleValue = string | string[]
 type Styles = Record<string, StyleValue>
@@ -13,6 +31,7 @@ type FullCornerKey = 'tl' | 'tr' | 'bl' | 'br'
 type LimitAxis = 'width' | 'height'
 type LimitKind = 'min' | 'max'
 type LimitFieldKey = `${LimitAxis}-${LimitKind}`
+type BackgroundPickerMode = 'hex' | 'rgb' | 'hsl'
 type RawEditorCategory =
   | 'padding'
   | 'margin'
@@ -69,6 +88,53 @@ const RAW_EDITOR_GROUPS: Array<{
   { key: 'other', label: 'Other classes', placeholder: 'relative overflow-hidden transition', pattern: null },
 ] as const
 
+const colorTokenCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+})
+
+const PINNED_BACKGROUND_COLOR_TOKENS = ['black', 'white'] as const
+
+const TAILWIND_COLOR_OPTIONS = Object.entries(tailwindColors as Record<string, unknown>)
+  .flatMap(([family, palette]) => {
+    if (typeof palette === 'string') {
+      return [{ token: family, value: palette }]
+    }
+
+    if (!palette || typeof palette !== 'object') {
+      return []
+    }
+
+    return Object.entries(palette as Record<string, unknown>)
+      .filter(([, value]) => typeof value === 'string')
+      .map(([shade, value]) => ({
+        token: `${family}-${shade}`,
+        value: value as string,
+      }))
+  })
+  .sort((left, right) => {
+    const leftPinnedIndex = PINNED_BACKGROUND_COLOR_TOKENS.indexOf(
+      left.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+    )
+    const rightPinnedIndex = PINNED_BACKGROUND_COLOR_TOKENS.indexOf(
+      right.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+    )
+
+    if (leftPinnedIndex !== -1 || rightPinnedIndex !== -1) {
+      if (leftPinnedIndex === -1) return 1
+      if (rightPinnedIndex === -1) return -1
+      return leftPinnedIndex - rightPinnedIndex
+    }
+
+    return colorTokenCollator.compare(left.token, right.token)
+  })
+
+function shouldSuggestTailwindColors(value: string) {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) return true
+  return !/^(#|var\(|rgb\(|rgba\(|hsl\(|hsla\(|oklch\()/i.test(trimmedValue)
+}
+
 function componentNameToFileName(componentName: string) {
   const generatedMatch = componentName.match(/^Div(\d{3})$/)
   if (generatedMatch) {
@@ -102,17 +168,11 @@ function getBreadcrumb(selectedComponent: string | null, components: ComponentGr
 function toClassTokens(value: StyleValue | undefined) {
   if (!value) return [] as string[]
   const raw = Array.isArray(value) ? value.join(' ') : value
-  return raw
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean)
+  return tokenizeClassString(raw)
 }
 
 function tokenizeClassInput(value: string) {
-  return value
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean)
+  return tokenizeClassString(value)
 }
 
 function fromClassTokens(tokens: string[], originalValue: StyleValue | undefined): StyleValue {
@@ -155,8 +215,7 @@ function getTokenValue(token: string, prefix: string) {
 }
 
 function formatPaddingValueForInput(value: string) {
-  const arbitraryValueMatch = value.match(/^\[(.+)\]$/)
-  return arbitraryValueMatch ? arbitraryValueMatch[1] : value
+  return unwrapArbitraryValue(value)
 }
 
 function normalizePaddingValue(value: string) {
@@ -235,8 +294,62 @@ function parseRoundedToken(token: string) {
 }
 
 function formatRadiusValueForInput(value: string) {
-  const arbitraryValueMatch = value.match(/^\[(.+)\]$/)
-  return arbitraryValueMatch ? arbitraryValueMatch[1] : value
+  return unwrapArbitraryValue(value)
+}
+
+function resolveTailwindColorValue(colorValue: string) {
+  const trimmedValue = decodeTailwindArbitraryValue(colorValue.trim())
+  if (!trimmedValue) return null
+
+  if (
+    trimmedValue.startsWith('#') ||
+    trimmedValue.startsWith('rgb(') ||
+    trimmedValue.startsWith('rgba(') ||
+    trimmedValue.startsWith('hsl(') ||
+    trimmedValue.startsWith('hsla(') ||
+    trimmedValue.startsWith('oklch(') ||
+    trimmedValue.startsWith('var(')
+  ) {
+    return trimmedValue
+  }
+
+  const directMatch = (tailwindColors as Record<string, unknown>)[trimmedValue]
+  if (typeof directMatch === 'string') return directMatch
+
+  const colorMatch = trimmedValue.match(/^([a-z-]+)-(\d{2,3})$/)
+  if (!colorMatch) return null
+
+  const [, family, shade] = colorMatch
+  const palette = (tailwindColors as Record<string, unknown>)[family]
+  if (!palette || typeof palette !== 'object') return null
+
+  const shadeValue = (palette as Record<string, string>)[shade]
+  return typeof shadeValue === 'string' ? shadeValue : null
+}
+
+function parseBorderColorToken(token: string) {
+  if (!token.startsWith('border-')) {
+    return {
+      colorValue: '',
+      opacityValue: '100',
+    }
+  }
+
+  const { colorValue, opacityValue } = splitTopLevelOpacitySuffix(token.slice(7))
+  return {
+    colorValue: decodeTailwindArbitraryValue(unwrapArbitraryValue(colorValue)),
+    opacityValue: opacityValue || '100',
+  }
+}
+
+function buildBorderColorToken(colorValue: string, opacityValue: string) {
+  const normalizedColorValue = normalizeBackgroundColorValue(colorValue)
+  if (!normalizedColorValue) return ''
+
+  const normalizedOpacityValue = normalizeBackgroundOpacityValue(opacityValue)
+  return normalizedOpacityValue === '100'
+    ? `border-${normalizedColorValue}`
+    : `border-${normalizedColorValue}/${normalizedOpacityValue}`
 }
 
 function normalizeRadiusValue(value: string) {
@@ -461,6 +574,460 @@ function LimitValueField({
   )
 }
 
+function ColorChannelField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="space-y-1">
+      <span className={tinyLabelClass()}>{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onFocus={(event) => {
+          event.currentTarget.select()
+        }}
+        className="h-8 w-full rounded-lg bg-gray-100 px-2 text-[11px] font-medium text-black outline-none"
+      />
+    </label>
+  )
+}
+
+function BackgroundColorCombobox({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (value: string) => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+
+  const filteredOptions = useMemo(() => {
+    const trimmedValue = value.trim().toLowerCase()
+    if (!shouldSuggestTailwindColors(value)) return []
+    if (!trimmedValue) return TAILWIND_COLOR_OPTIONS.slice(0, 24)
+
+    return TAILWIND_COLOR_OPTIONS.filter((option) => option.token.includes(trimmedValue)).slice(0, 24)
+  }, [value])
+  const hasPinnedOptions = filteredOptions.some((option) =>
+    PINNED_BACKGROUND_COLOR_TOKENS.includes(
+      option.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+    )
+  )
+
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [value])
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
+  }, [isOpen])
+
+  return (
+    <div className="relative flex-1" ref={wrapperRef}>
+      <input
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value)
+          setIsOpen(true)
+        }}
+        onFocus={() => {
+          setIsOpen(true)
+        }}
+        onKeyDown={(event) => {
+          if (!filteredOptions.length) {
+            if (event.key === 'Escape') {
+              setIsOpen(false)
+            }
+            return
+          }
+
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            setIsOpen(true)
+            setHighlightedIndex((prev) => Math.min(prev + 1, filteredOptions.length - 1))
+            return
+          }
+
+          if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            setIsOpen(true)
+            setHighlightedIndex((prev) => Math.max(prev - 1, 0))
+            return
+          }
+
+          if (event.key === 'Enter' && isOpen) {
+            const highlightedOption = filteredOptions[highlightedIndex]
+            if (highlightedOption) {
+              event.preventDefault()
+              onChange(highlightedOption.token)
+              setIsOpen(false)
+            }
+            return
+          }
+
+          if (event.key === 'Escape') {
+            setIsOpen(false)
+          }
+        }}
+        className="h-6 w-full rounded-lg bg-gray-100 px-3 text-[10px] font-medium text-black/70 outline-none"
+        placeholder="emerald-100"
+        aria-label="Background color"
+        aria-expanded={isOpen && filteredOptions.length > 0}
+        aria-autocomplete="list"
+        aria-haspopup="listbox"
+        role="combobox"
+      />
+
+      {isOpen && filteredOptions.length > 0 && (
+        <div className="absolute left-0 right-0 top-7 z-20 max-h-52 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
+          <div role="listbox" aria-label="Tailwind background colors" className="space-y-1">
+            {filteredOptions.map((option, index) => (
+              <button
+                key={option.token}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  onChange(option.token)
+                  setIsOpen(false)
+                }}
+                onMouseEnter={() => {
+                  setHighlightedIndex(index)
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] font-medium transition ${
+                  highlightedIndex === index ? 'bg-zinc-100 text-black' : 'text-zinc-700'
+                }`}
+                style={{
+                  borderTop:
+                    hasPinnedOptions && index > 0 && !PINNED_BACKGROUND_COLOR_TOKENS.includes(
+                      option.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+                    ) &&
+                    PINNED_BACKGROUND_COLOR_TOKENS.includes(
+                      filteredOptions[index - 1]
+                        ?.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+                    )
+                      ? '1px solid rgb(228 228 231)'
+                      : undefined,
+                  marginTop:
+                    hasPinnedOptions && index > 0 && !PINNED_BACKGROUND_COLOR_TOKENS.includes(
+                      option.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+                    ) &&
+                    PINNED_BACKGROUND_COLOR_TOKENS.includes(
+                      filteredOptions[index - 1]
+                        ?.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+                    )
+                      ? '0.25rem'
+                      : undefined,
+                  paddingTop:
+                    hasPinnedOptions && index > 0 && !PINNED_BACKGROUND_COLOR_TOKENS.includes(
+                      option.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+                    ) &&
+                    PINNED_BACKGROUND_COLOR_TOKENS.includes(
+                      filteredOptions[index - 1]
+                        ?.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
+                    )
+                      ? '0.5rem'
+                      : undefined,
+                }}
+                role="option"
+                aria-selected={highlightedIndex === index}
+              >
+                <span
+                  className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/10"
+                  style={{ backgroundColor: option.value }}
+                />
+                <span className="min-w-0 flex-1 truncate">{option.token}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function parsePickerDraftNumber(value: string, fallback: number) {
+  const parsedValue = Number.parseInt(value, 10)
+  return Number.isFinite(parsedValue) ? parsedValue : fallback
+}
+
+function BackgroundColorMap({
+  mode,
+  draft,
+  onRgbChange,
+  onHslChange,
+}: {
+  mode: BackgroundPickerMode
+  draft: {
+    red: string
+    green: string
+    blue: string
+    hue: string
+    saturation: string
+    lightness: string
+  }
+  onRgbChange: (channel: 'red' | 'green' | 'blue', value: string) => void
+  onHslChange: (channel: 'hue' | 'saturation' | 'lightness', value: string) => void
+}) {
+  const red = clampNumber(parsePickerDraftNumber(draft.red, 255), 0, 255)
+  const green = clampNumber(parsePickerDraftNumber(draft.green, 255), 0, 255)
+  const blue = clampNumber(parsePickerDraftNumber(draft.blue, 255), 0, 255)
+  const hue = clampNumber(parsePickerDraftNumber(draft.hue, 0), 0, 360)
+  const saturation = clampNumber(parsePickerDraftNumber(draft.saturation, 100), 0, 100)
+  const lightness = clampNumber(parsePickerDraftNumber(draft.lightness, 50), 0, 100)
+  const hslPreview = hslToRgb(hue, saturation, lightness)
+
+  const colorSpaceMode = mode === 'rgb' ? 'rgb' : 'hsl'
+  const isHexMode = mode === 'hex'
+  const planeXRatio = saturation / 100
+  const planeYRatio = 1 - lightness / 100
+  const sliderRatio = hue / 360
+  const planeBackground =
+    `linear-gradient(to top, hsl(${hue} 100% 0%), transparent), linear-gradient(to right, hsl(${hue} 0% 50%), hsl(${hue} 100% 50%))`
+  const sliderBackground =
+    'linear-gradient(to right, hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%))'
+  const indicatorColor =
+    colorSpaceMode === 'rgb'
+      ? `rgb(${red} ${green} ${blue})`
+      : `rgb(${hslPreview.red} ${hslPreview.green} ${hslPreview.blue})`
+
+  const updatePlane = (clientX: number, clientY: number, target: HTMLDivElement) => {
+    const rect = target.getBoundingClientRect()
+    const xRatio = clampNumber((clientX - rect.left) / rect.width, 0, 1)
+    const yRatio = clampNumber((clientY - rect.top) / rect.height, 0, 1)
+
+    onHslChange('saturation', `${Math.round(xRatio * 100)}`)
+    onHslChange('lightness', `${Math.round((1 - yRatio) * 100)}`)
+  }
+
+  const updateSlider = (clientX: number, target: HTMLDivElement) => {
+    const rect = target.getBoundingClientRect()
+    const ratio = clampNumber((clientX - rect.left) / rect.width, 0, 1)
+
+    onHslChange('hue', `${Math.round(ratio * 360)}`)
+  }
+
+  const renderRgbSlider = (
+    channel: 'red' | 'green' | 'blue',
+    label: string,
+    value: number,
+    backgroundImage: string
+  ) => (
+    <div key={channel} className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className={tinyLabelClass()}>{label}</span>
+        <span className={tinyLabelClass()}>{value}</span>
+      </div>
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label={`${label} channel slider`}
+        aria-valuemin={0}
+        aria-valuemax={255}
+        aria-valuenow={value}
+        onPointerDown={(event) => {
+          const target = event.currentTarget
+          target.setPointerCapture(event.pointerId)
+          const rect = target.getBoundingClientRect()
+          const ratio = clampNumber((event.clientX - rect.left) / rect.width, 0, 1)
+          onRgbChange(channel, `${Math.round(ratio * 255)}`)
+        }}
+        onPointerMove={(event) => {
+          if ((event.buttons & 1) !== 1) return
+          const rect = event.currentTarget.getBoundingClientRect()
+          const ratio = clampNumber((event.clientX - rect.left) / rect.width, 0, 1)
+          onRgbChange(channel, `${Math.round(ratio * 255)}`)
+        }}
+        className="relative h-4 w-full cursor-ew-resize rounded-full border border-zinc-200"
+        style={{ backgroundImage }}
+      >
+        <div
+          className="pointer-events-none absolute top-1/2 h-5 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-black/70 shadow-sm"
+          style={{ left: `${(value / 255) * 100}%` }}
+        />
+      </div>
+    </div>
+  )
+
+  if (colorSpaceMode === 'rgb') {
+    return (
+      <div className="space-y-2">
+        {renderRgbSlider(
+          'red',
+          'Red',
+          red,
+          `linear-gradient(to right, rgb(0 ${green} ${blue}), rgb(255 ${green} ${blue}))`
+        )}
+        {renderRgbSlider(
+          'green',
+          'Green',
+          green,
+          `linear-gradient(to right, rgb(${red} 0 ${blue}), rgb(${red} 255 ${blue}))`
+        )}
+        {renderRgbSlider(
+          'blue',
+          'Blue',
+          blue,
+          `linear-gradient(to right, rgb(${red} ${green} 0), rgb(${red} ${green} 255))`
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <span className={tinyLabelClass()}>
+        {isHexMode ? 'Visual picker' : 'Saturation / Lightness plane'}
+      </span>
+
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label={isHexMode ? 'Hex visual color map' : 'HSL color map'}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(planeXRatio * 100)}
+        onPointerDown={(event) => {
+          const target = event.currentTarget
+          target.setPointerCapture(event.pointerId)
+          updatePlane(event.clientX, event.clientY, target)
+        }}
+        onPointerMove={(event) => {
+          if ((event.buttons & 1) !== 1) return
+          updatePlane(event.clientX, event.clientY, event.currentTarget)
+        }}
+        className="relative h-36 w-full cursor-crosshair overflow-hidden rounded-xl border border-zinc-200"
+        style={{
+          backgroundImage: planeBackground,
+        }}
+      >
+        <div
+          className="pointer-events-none absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-sm ring-1 ring-black/20"
+          style={{
+            left: `${planeXRatio * 100}%`,
+            top: `${planeYRatio * 100}%`,
+            backgroundColor: indicatorColor,
+          }}
+        />
+      </div>
+
+      <span className={tinyLabelClass()}>
+        {isHexMode ? 'Hue refine' : 'Hue slider'}
+      </span>
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label={isHexMode ? 'Hex hue refine slider' : 'Hue channel slider'}
+        aria-valuemin={0}
+        aria-valuemax={360}
+        aria-valuenow={hue}
+        onPointerDown={(event) => {
+          const target = event.currentTarget
+          target.setPointerCapture(event.pointerId)
+          updateSlider(event.clientX, target)
+        }}
+        onPointerMove={(event) => {
+          if ((event.buttons & 1) !== 1) return
+          updateSlider(event.clientX, event.currentTarget)
+        }}
+        className="relative h-4 w-full cursor-ew-resize rounded-full border border-zinc-200"
+        style={{
+          backgroundImage: sliderBackground,
+        }}
+      >
+        <div
+          className="pointer-events-none absolute top-1/2 h-5 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-black/70 shadow-sm"
+          style={{
+            left: `${sliderRatio * 100}%`,
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function BackgroundOpacitySlider({
+  colorValue,
+  opacityValue,
+  onChange,
+}: {
+  colorValue: string
+  opacityValue: string
+  onChange: (value: string) => void
+}) {
+  const normalizedOpacity = clampNumber(parsePickerDraftNumber(opacityValue, 100), 0, 100)
+  const resolvedColor = resolveTailwindColorValue(colorValue) ?? '#ffffff'
+  const sliderRgb = parseCssColorToRgb(resolvedColor) ?? { red: 255, green: 255, blue: 255 }
+  const sliderBackground = [
+    'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
+    `linear-gradient(to right, rgb(${sliderRgb.red} ${sliderRgb.green} ${sliderRgb.blue} / 0), rgb(${sliderRgb.red} ${sliderRgb.green} ${sliderRgb.blue} / 1))`,
+  ].join(', ')
+
+  const updateSlider = (clientX: number, target: HTMLDivElement) => {
+    const rect = target.getBoundingClientRect()
+    const ratio = clampNumber((clientX - rect.left) / rect.width, 0, 1)
+    onChange(`${Math.round(ratio * 100)}`)
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className={tinyLabelClass()}>Opacity</span>
+        <span className={tinyLabelClass()}>{normalizedOpacity}%</span>
+      </div>
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label="Background opacity slider"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={normalizedOpacity}
+        onPointerDown={(event) => {
+          const target = event.currentTarget
+          target.setPointerCapture(event.pointerId)
+          updateSlider(event.clientX, target)
+        }}
+        onPointerMove={(event) => {
+          if ((event.buttons & 1) !== 1) return
+          updateSlider(event.clientX, event.currentTarget)
+        }}
+        className="relative h-2.5 w-full cursor-ew-resize rounded-full border border-zinc-200"
+        style={{
+          backgroundColor: '#f4f4f5',
+          backgroundImage: sliderBackground,
+          backgroundPosition: '0 0, 0 0',
+          backgroundSize: '8px 8px, 100% 100%',
+        }}
+      >
+        <div
+          className="pointer-events-none absolute top-1/2 h-4 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-black/70 shadow-sm"
+          style={{
+            left: `${normalizedOpacity}%`,
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 function RawClassTextarea({
   label,
   value,
@@ -536,6 +1103,18 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     other: '',
   })
   const [activeRawEditor, setActiveRawEditor] = useState<RawEditorCategory | null>(null)
+  const [isBackgroundPickerOpen, setIsBackgroundPickerOpen] = useState(false)
+  const [backgroundPickerMode, setBackgroundPickerMode] = useState<BackgroundPickerMode>('hex')
+  const [backgroundPickerDraft, setBackgroundPickerDraft] = useState(() =>
+    buildBackgroundPickerDraft('#ffffff')
+  )
+  const backgroundPickerRef = useRef<HTMLDivElement | null>(null)
+  const [isBorderPickerOpen, setIsBorderPickerOpen] = useState(false)
+  const [borderPickerMode, setBorderPickerMode] = useState<BackgroundPickerMode>('hex')
+  const [borderPickerDraft, setBorderPickerDraft] = useState(() =>
+    buildBackgroundPickerDraft('#d4d4d8')
+  )
+  const borderPickerRef = useRef<HTMLDivElement | null>(null)
 
   const breadcrumb = getBreadcrumb(selectedComponent, components)
   const selectedGroup = useMemo(
@@ -566,10 +1145,18 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const clipsContent = classTokens.includes('overflow-hidden') || classTokens.includes('overflow-clip')
   const gapClass = findToken(classTokens, /^gap-.+/)
   const backgroundClass = findToken(classTokens, /^bg-(?!clip-padding$).+/)
+  const backgroundDetails = parseBackgroundToken(backgroundClass)
+  const backgroundPreviewColor = resolveTailwindColorValue(backgroundDetails.colorValue)
+  const backgroundPreviewOpacity = Number.parseInt(backgroundDetails.opacityValue, 10)
+  const backgroundPickerBaseColor = backgroundPreviewColor ?? '#ffffff'
   const borderColorClass = findToken(
     classTokens,
     /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/
   )
+  const borderDetails = parseBorderColorToken(borderColorClass)
+  const borderPreviewColor = resolveTailwindColorValue(borderDetails.colorValue)
+  const borderPreviewOpacity = Number.parseInt(borderDetails.opacityValue, 10)
+  const borderPickerBaseColor = borderPreviewColor ?? '#d4d4d8'
   const borderWeightClass = findToken(classTokens, /^border(?:-(?:0|2|4|8))?$/) || 'border'
   const minWidthClass = findToken(classTokens, /^min-w-.+/)
   const maxWidthClass = findToken(classTokens, /^max-w-.+/)
@@ -683,7 +1270,49 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
       'height-max': false,
     })
     setActiveLimitMenu(null)
+    setIsBackgroundPickerOpen(false)
+    setIsBorderPickerOpen(false)
   }, [selectedComponent])
+
+  useEffect(() => {
+    if (!isBackgroundPickerOpen) return
+    setBackgroundPickerDraft(buildBackgroundPickerDraft(backgroundPickerBaseColor))
+  }, [isBackgroundPickerOpen])
+
+  useEffect(() => {
+    if (!isBorderPickerOpen) return
+    setBorderPickerDraft(buildBackgroundPickerDraft(borderPickerBaseColor))
+  }, [isBorderPickerOpen])
+
+  useEffect(() => {
+    if (!isBackgroundPickerOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!backgroundPickerRef.current?.contains(event.target as Node)) {
+        setIsBackgroundPickerOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
+  }, [isBackgroundPickerOpen])
+
+  useEffect(() => {
+    if (!isBorderPickerOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!borderPickerRef.current?.contains(event.target as Node)) {
+        setIsBorderPickerOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
+  }, [isBorderPickerOpen])
 
   useEffect(() => {
     setVisibleLimitFields((prev) => ({
@@ -724,6 +1353,197 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const updateSingleField = (pattern: RegExp, nextValue: string) => {
     const nextTokens = replaceTokens(classTokens, pattern, nextValue ? [nextValue] : [])
     updateSelectedStyle(nextTokens)
+  }
+
+  const handleBackgroundColorChange = (nextValue: string) => {
+    updateSingleField(
+      /^bg-(?!clip-padding$).+/,
+      buildBackgroundToken(nextValue, backgroundDetails.opacityValue)
+    )
+  }
+
+  const handleBackgroundOpacityChange = (nextValue: string) => {
+    updateSingleField(
+      /^bg-(?!clip-padding$).+/,
+      buildBackgroundToken(backgroundDetails.colorValue, nextValue)
+    )
+  }
+
+  const handleAddBackgroundColor = () => {
+    if (backgroundDetails.colorValue) return
+    updateSingleField(/^bg-(?!clip-padding$).+/, 'bg-emerald-100')
+  }
+
+  const applyBackgroundPickerColor = (nextColorValue: string) => {
+    handleBackgroundColorChange(nextColorValue)
+  }
+
+  const handleBackgroundPickerHexChange = (nextValue: string) => {
+    const parsedHex = parseHexColor(nextValue)
+    if (!parsedHex) {
+      setBackgroundPickerDraft((prev) => ({ ...prev, hex: nextValue }))
+      return
+    }
+
+    setBackgroundPickerDraft(
+      buildBackgroundPickerDraftFromRgb(parsedHex.red, parsedHex.green, parsedHex.blue)
+    )
+    applyBackgroundPickerColor(nextValue)
+  }
+
+  const handleBackgroundPickerRgbChange = (
+    channel: 'red' | 'green' | 'blue',
+    nextValue: string
+  ) => {
+    setBackgroundPickerDraft((prev) => {
+      const nextDraft = { ...prev, [channel]: nextValue }
+      const red = Number.parseInt(nextDraft.red, 10)
+      const green = Number.parseInt(nextDraft.green, 10)
+      const blue = Number.parseInt(nextDraft.blue, 10)
+
+      if ([red, green, blue].every((value) => Number.isFinite(value) && value >= 0 && value <= 255)) {
+        const resolvedDraft = buildBackgroundPickerDraftFromRgb(red, green, blue)
+        applyBackgroundPickerColor(`rgb(${red} ${green} ${blue})`)
+        return {
+          ...resolvedDraft,
+          red: nextDraft.red,
+          green: nextDraft.green,
+          blue: nextDraft.blue,
+        }
+      }
+
+      return nextDraft
+    })
+  }
+
+  const handleBackgroundPickerHslChange = (
+    channel: 'hue' | 'saturation' | 'lightness',
+    nextValue: string
+  ) => {
+    setBackgroundPickerDraft((prev) => {
+      const nextDraft = { ...prev, [channel]: nextValue }
+      const hue = Number.parseInt(nextDraft.hue, 10)
+      const saturation = Number.parseInt(nextDraft.saturation, 10)
+      const lightness = Number.parseInt(nextDraft.lightness, 10)
+
+      if (
+        Number.isFinite(hue) &&
+        Number.isFinite(saturation) &&
+        Number.isFinite(lightness) &&
+        saturation >= 0 &&
+        saturation <= 100 &&
+        lightness >= 0 &&
+        lightness <= 100
+      ) {
+        const resolvedDraft = buildBackgroundPickerDraftFromHsl(hue, saturation, lightness)
+        applyBackgroundPickerColor(`hsl(${hue} ${saturation}% ${lightness}%)`)
+        return {
+          ...resolvedDraft,
+          hue: nextDraft.hue,
+          saturation: nextDraft.saturation,
+          lightness: nextDraft.lightness,
+        }
+      }
+
+      return nextDraft
+    })
+  }
+
+  const handleBorderColorChange = (nextValue: string) => {
+    updateSingleField(
+      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
+      buildBorderColorToken(nextValue, borderDetails.opacityValue)
+    )
+  }
+
+  const handleBorderOpacityChange = (nextValue: string) => {
+    updateSingleField(
+      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
+      buildBorderColorToken(borderDetails.colorValue, nextValue)
+    )
+  }
+
+  const handleAddBorderColor = () => {
+    if (borderDetails.colorValue) return
+    updateSingleField(
+      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
+      'border-emerald-100'
+    )
+  }
+
+  const applyBorderPickerColor = (nextColorValue: string) => {
+    handleBorderColorChange(nextColorValue)
+  }
+
+  const handleBorderPickerHexChange = (nextValue: string) => {
+    const parsedHex = parseHexColor(nextValue)
+    if (!parsedHex) {
+      setBorderPickerDraft((prev) => ({ ...prev, hex: nextValue }))
+      return
+    }
+
+    setBorderPickerDraft(
+      buildBackgroundPickerDraftFromRgb(parsedHex.red, parsedHex.green, parsedHex.blue)
+    )
+    applyBorderPickerColor(nextValue)
+  }
+
+  const handleBorderPickerRgbChange = (
+    channel: 'red' | 'green' | 'blue',
+    nextValue: string
+  ) => {
+    setBorderPickerDraft((prev) => {
+      const nextDraft = { ...prev, [channel]: nextValue }
+      const red = Number.parseInt(nextDraft.red, 10)
+      const green = Number.parseInt(nextDraft.green, 10)
+      const blue = Number.parseInt(nextDraft.blue, 10)
+
+      if ([red, green, blue].every((value) => Number.isFinite(value) && value >= 0 && value <= 255)) {
+        const resolvedDraft = buildBackgroundPickerDraftFromRgb(red, green, blue)
+        applyBorderPickerColor(`rgb(${red} ${green} ${blue})`)
+        return {
+          ...resolvedDraft,
+          red: nextDraft.red,
+          green: nextDraft.green,
+          blue: nextDraft.blue,
+        }
+      }
+
+      return nextDraft
+    })
+  }
+
+  const handleBorderPickerHslChange = (
+    channel: 'hue' | 'saturation' | 'lightness',
+    nextValue: string
+  ) => {
+    setBorderPickerDraft((prev) => {
+      const nextDraft = { ...prev, [channel]: nextValue }
+      const hue = Number.parseInt(nextDraft.hue, 10)
+      const saturation = Number.parseInt(nextDraft.saturation, 10)
+      const lightness = Number.parseInt(nextDraft.lightness, 10)
+
+      if (
+        Number.isFinite(hue) &&
+        Number.isFinite(saturation) &&
+        Number.isFinite(lightness) &&
+        saturation >= 0 &&
+        saturation <= 100 &&
+        lightness >= 0 &&
+        lightness <= 100
+      ) {
+        const resolvedDraft = buildBackgroundPickerDraftFromHsl(hue, saturation, lightness)
+        applyBorderPickerColor(`hsl(${hue} ${saturation}% ${lightness}%)`)
+        return {
+          ...resolvedDraft,
+          hue: nextDraft.hue,
+          saturation: nextDraft.saturation,
+          lightness: nextDraft.lightness,
+        }
+      }
+
+      return nextDraft
+    })
   }
 
   const handleRawCategoryChange = (category: RawEditorCategory, value: string) => {
@@ -1426,46 +2246,339 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                 <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">
                   Background Color
                 </p>
-                <PlaceholderBadge />
-                <span className="text-2xl leading-none">+</span>
+                <button
+                  type="button"
+                  onClick={handleAddBackgroundColor}
+                  className="text-2xl leading-none text-black"
+                  aria-label="Add background color"
+                  title="Add background color"
+                >
+                  +
+                </button>
               </div>
               <div className="flex gap-1">
-                <input
-                  value={backgroundClass}
-                  onChange={(event) => updateSingleField(/^bg-(?!clip-padding$).+$/, event.target.value)}
-                  className="h-6 flex-1 rounded-lg bg-gray-100 px-3 text-[10px] font-medium text-black/70 outline-none"
-                  placeholder="bg-red-100"
+                <BackgroundColorCombobox
+                  value={backgroundDetails.colorValue}
+                  onChange={handleBackgroundColorChange}
                 />
-                <div className="flex h-6 w-11 items-center justify-center rounded-lg bg-gray-100 text-[10px] font-medium text-black/70">
-                  100%
+                <input
+                  value={`${backgroundDetails.opacityValue}%`}
+                  onChange={(event) => handleBackgroundOpacityChange(event.target.value)}
+                  className="h-6 w-11 rounded-lg bg-gray-100 px-2 text-[10px] font-medium text-black/70 outline-none"
+                  placeholder="100%"
+                  aria-label="Background opacity"
+                />
+                <div className="relative" ref={backgroundPickerRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsBackgroundPickerOpen((prev) => !prev)}
+                    className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
+                    aria-label="Open background color picker"
+                    title="Open background color picker"
+                  >
+                    <div
+                      className="w-full"
+                      style={{
+                        backgroundColor: backgroundPreviewColor ?? 'transparent',
+                        opacity: Number.isNaN(backgroundPreviewOpacity)
+                          ? 1
+                          : Math.min(100, Math.max(0, backgroundPreviewOpacity)) / 100,
+                      }}
+                    />
+                  </button>
+                  {isBackgroundPickerOpen && (
+                    <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={backgroundPickerDraft.hex}
+                              onChange={(event) => {
+                                const nextValue = event.target.value
+                                setBackgroundPickerDraft(buildBackgroundPickerDraft(nextValue))
+                                applyBackgroundPickerColor(nextValue)
+                              }}
+                              className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
+                              aria-label="Pick background color"
+                            />
+                            <div
+                              className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
+                              aria-label="Background color preview"
+                              title="Background color preview"
+                              style={{
+                                backgroundColor: '#f4f4f5',
+                                backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
+                                backgroundSize: '8px 8px',
+                              }}
+                            >
+                              <div
+                                className="absolute inset-0"
+                                style={{
+                                  backgroundColor: backgroundPreviewColor ?? 'transparent',
+                                  opacity: Number.isNaN(backgroundPreviewOpacity)
+                                    ? 1
+                                    : Math.min(100, Math.max(0, backgroundPreviewOpacity)) / 100,
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
+                            {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => setBackgroundPickerMode(mode)}
+                                className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
+                                  backgroundPickerMode === mode
+                                    ? 'bg-white text-black shadow-sm'
+                                    : 'text-zinc-500'
+                                }`}
+                              >
+                                {mode}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <BackgroundColorMap
+                          mode={backgroundPickerMode}
+                          draft={backgroundPickerDraft}
+                          onRgbChange={handleBackgroundPickerRgbChange}
+                          onHslChange={handleBackgroundPickerHslChange}
+                        />
+
+                        <BackgroundOpacitySlider
+                          colorValue={backgroundDetails.colorValue}
+                          opacityValue={backgroundDetails.opacityValue}
+                          onChange={handleBackgroundOpacityChange}
+                        />
+
+                        {backgroundPickerMode === 'hex' && (
+                          <ColorChannelField
+                            label="Hex"
+                            value={backgroundPickerDraft.hex}
+                            onChange={handleBackgroundPickerHexChange}
+                          />
+                        )}
+
+                        {backgroundPickerMode === 'rgb' && (
+                          <div className="grid grid-cols-3 gap-2">
+                            <ColorChannelField
+                              label="R"
+                              value={backgroundPickerDraft.red}
+                              onChange={(value) => handleBackgroundPickerRgbChange('red', value)}
+                            />
+                            <ColorChannelField
+                              label="G"
+                              value={backgroundPickerDraft.green}
+                              onChange={(value) => handleBackgroundPickerRgbChange('green', value)}
+                            />
+                            <ColorChannelField
+                              label="B"
+                              value={backgroundPickerDraft.blue}
+                              onChange={(value) => handleBackgroundPickerRgbChange('blue', value)}
+                            />
+                          </div>
+                        )}
+
+                        {backgroundPickerMode === 'hsl' && (
+                          <div className="grid grid-cols-3 gap-2">
+                            <ColorChannelField
+                              label="H"
+                              value={backgroundPickerDraft.hue}
+                              onChange={(value) => handleBackgroundPickerHslChange('hue', value)}
+                            />
+                            <ColorChannelField
+                              label="S"
+                              value={backgroundPickerDraft.saturation}
+                              onChange={(value) =>
+                                handleBackgroundPickerHslChange('saturation', value)
+                              }
+                            />
+                            <ColorChannelField
+                              label="L"
+                              value={backgroundPickerDraft.lightness}
+                              onChange={(value) =>
+                                handleBackgroundPickerHslChange('lightness', value)
+                              }
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="h-6 w-[30px] rounded-lg border border-zinc-200 bg-white" />
               </div>
             </section>
 
             <section className="space-y-4">
               <div className="flex items-center gap-2 pt-1">
                 <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">Border</p>
-                <PlaceholderBadge />
-                <span className="text-2xl leading-none">+</span>
+                <button
+                  type="button"
+                  onClick={handleAddBorderColor}
+                  className="text-2xl leading-none text-black"
+                  aria-label="Add border color"
+                  title="Add border color"
+                >
+                  +
+                </button>
               </div>
 
               <div className="flex gap-1">
-                <input
-                  value={borderColorClass}
-                  onChange={(event) =>
-                    updateSingleField(
-                      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
-                      event.target.value
-                    )
-                  }
-                  className="h-6 flex-1 rounded-lg bg-gray-100 px-3 text-[10px] font-medium text-black/70 outline-none"
-                  placeholder="border-zinc-200"
+                <BackgroundColorCombobox
+                  value={borderDetails.colorValue}
+                  onChange={handleBorderColorChange}
                 />
-                <div className="flex h-6 w-11 items-center justify-center rounded-lg bg-gray-100 text-[10px] font-medium text-black/70">
-                  100%
+                <input
+                  value={`${borderDetails.opacityValue}%`}
+                  onChange={(event) => handleBorderOpacityChange(event.target.value)}
+                  className="h-6 w-11 rounded-lg bg-gray-100 px-2 text-[10px] font-medium text-black/70 outline-none"
+                  placeholder="100%"
+                  aria-label="Border opacity"
+                />
+                <div className="relative" ref={borderPickerRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsBorderPickerOpen((prev) => !prev)}
+                    className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
+                    aria-label="Open border color picker"
+                    title="Open border color picker"
+                  >
+                    <div
+                      className="w-full"
+                      style={{
+                        backgroundColor: borderPreviewColor ?? 'transparent',
+                        opacity: Number.isNaN(borderPreviewOpacity)
+                          ? 1
+                          : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+                      }}
+                    />
+                  </button>
+                  {isBorderPickerOpen && (
+                    <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={borderPickerDraft.hex}
+                              onChange={(event) => {
+                                const nextValue = event.target.value
+                                setBorderPickerDraft(buildBackgroundPickerDraft(nextValue))
+                                applyBorderPickerColor(nextValue)
+                              }}
+                              className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
+                              aria-label="Pick border color"
+                            />
+                            <div
+                              className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
+                              aria-label="Border color preview"
+                              title="Border color preview"
+                              style={{
+                                backgroundColor: '#f4f4f5',
+                                backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
+                                backgroundSize: '8px 8px',
+                              }}
+                            >
+                              <div
+                                className="absolute inset-0"
+                                style={{
+                                  backgroundColor: borderPreviewColor ?? 'transparent',
+                                  opacity: Number.isNaN(borderPreviewOpacity)
+                                    ? 1
+                                    : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
+                            {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => setBorderPickerMode(mode)}
+                                className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
+                                  borderPickerMode === mode
+                                    ? 'bg-white text-black shadow-sm'
+                                    : 'text-zinc-500'
+                                }`}
+                              >
+                                {mode}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <BackgroundColorMap
+                          mode={borderPickerMode}
+                          draft={borderPickerDraft}
+                          onRgbChange={handleBorderPickerRgbChange}
+                          onHslChange={handleBorderPickerHslChange}
+                        />
+
+                        <BackgroundOpacitySlider
+                          colorValue={borderDetails.colorValue}
+                          opacityValue={borderDetails.opacityValue}
+                          onChange={handleBorderOpacityChange}
+                        />
+
+                        {borderPickerMode === 'hex' && (
+                          <ColorChannelField
+                            label="Hex"
+                            value={borderPickerDraft.hex}
+                            onChange={handleBorderPickerHexChange}
+                          />
+                        )}
+
+                        {borderPickerMode === 'rgb' && (
+                          <div className="grid grid-cols-3 gap-2">
+                            <ColorChannelField
+                              label="R"
+                              value={borderPickerDraft.red}
+                              onChange={(value) => handleBorderPickerRgbChange('red', value)}
+                            />
+                            <ColorChannelField
+                              label="G"
+                              value={borderPickerDraft.green}
+                              onChange={(value) => handleBorderPickerRgbChange('green', value)}
+                            />
+                            <ColorChannelField
+                              label="B"
+                              value={borderPickerDraft.blue}
+                              onChange={(value) => handleBorderPickerRgbChange('blue', value)}
+                            />
+                          </div>
+                        )}
+
+                        {borderPickerMode === 'hsl' && (
+                          <div className="grid grid-cols-3 gap-2">
+                            <ColorChannelField
+                              label="H"
+                              value={borderPickerDraft.hue}
+                              onChange={(value) => handleBorderPickerHslChange('hue', value)}
+                            />
+                            <ColorChannelField
+                              label="S"
+                              value={borderPickerDraft.saturation}
+                              onChange={(value) =>
+                                handleBorderPickerHslChange('saturation', value)
+                              }
+                            />
+                            <ColorChannelField
+                              label="L"
+                              value={borderPickerDraft.lightness}
+                              onChange={(value) =>
+                                handleBorderPickerHslChange('lightness', value)
+                              }
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="h-6 w-[30px] rounded-lg border border-zinc-200 bg-white" />
               </div>
 
               <div className="space-y-1">
