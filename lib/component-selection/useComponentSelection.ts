@@ -46,6 +46,21 @@ function findGroupForComponent(componentHierarchy: ComponentGroup[], componentNa
   )
 }
 
+function applySelectionStyles(root: HTMLDivElement, selectedComponent: string | null) {
+  root.querySelectorAll('[data-codex-selected="true"]').forEach((el) => {
+    el.classList.remove('ring-2', 'ring-blue-500', 'bg-blue-50')
+    el.removeAttribute('data-codex-selected')
+  })
+
+  if (!selectedComponent) return
+
+  const slot = componentNameToSlot(selectedComponent)
+  root.querySelectorAll(`[data-slot="${slot}"]`).forEach((el) => {
+    el.classList.add('ring-2', 'ring-blue-500', 'bg-blue-50')
+    el.setAttribute('data-codex-selected', 'true')
+  })
+}
+
 export function useComponentSelection({ componentHierarchy }: UseComponentSelectionOptions) {
   const [selectedComponent, setSelectedComponent] = useState<string | null>(null)
   const canvasRef = useRef<HTMLDivElement | null>(null)
@@ -123,18 +138,22 @@ export function useComponentSelection({ componentHierarchy }: UseComponentSelect
     const root = canvasRef.current
     if (!root) return
 
-    root.querySelectorAll('[data-codex-selected="true"]').forEach((el) => {
-      el.classList.remove('ring-2', 'ring-blue-500', 'bg-blue-50')
-      el.removeAttribute('data-codex-selected')
+    applySelectionStyles(root, selectedComponent)
+
+    const observer = new MutationObserver(() => {
+      applySelectionStyles(root, selectedComponent)
     })
 
-    if (!selectedComponent) return
-
-    const slot = componentNameToSlot(selectedComponent)
-    root.querySelectorAll(`[data-slot="${slot}"]`).forEach((el) => {
-      el.classList.add('ring-2', 'ring-blue-500', 'bg-blue-50')
-      el.setAttribute('data-codex-selected', 'true')
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class'],
     })
+
+    return () => {
+      observer.disconnect()
+    }
   }, [selectedComponent])
 
   return {
