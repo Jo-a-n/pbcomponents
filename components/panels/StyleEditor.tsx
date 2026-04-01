@@ -32,6 +32,8 @@ type LimitAxis = 'width' | 'height'
 type LimitKind = 'min' | 'max'
 type LimitFieldKey = `${LimitAxis}-${LimitKind}`
 type BackgroundPickerMode = 'hex' | 'rgb' | 'hsl'
+type BorderWidthSide = 'top' | 'right' | 'bottom' | 'left'
+type BorderWidthTarget = 'all' | 'x' | 'y' | BorderWidthSide
 type RawEditorCategory =
   | 'padding'
   | 'margin'
@@ -54,7 +56,6 @@ const DIRECTION_OPTIONS = [
   { label: 'Grid', value: 'grid', icon: '⋮⋮' },
 ] as const
 
-const BORDER_WEIGHT_OPTIONS = ['border', 'border-0', 'border-2', 'border-4'] as const
 const PADDING_TOKEN_PATTERN = /^(p|px|py|pl|pr|pt|pb)-.+$/
 const MARGIN_TOKEN_PATTERN = /^(m|mx|my|ml|mr|mt|mb|ms|me)-.+$/
 const RADIUS_TOKEN_PATTERN = /^rounded(?:-(?:tl|tr|br|bl|t|r|b|l))?(?:-.+)?$/
@@ -352,6 +353,234 @@ function buildBorderColorToken(colorValue: string, opacityValue: string) {
     : `border-${normalizedColorValue}/${normalizedOpacityValue}`
 }
 
+function formatBorderWidthValueForInput(value: string) {
+  const normalizedValue = unwrapArbitraryValue(value)
+  if (normalizedValue === '0') return '0px'
+  if (normalizedValue === '2') return '2px'
+  if (normalizedValue === '4') return '4px'
+  if (normalizedValue === '8') return '8px'
+  return normalizedValue
+}
+
+function formatBorderWidthValueForDisplay(value: string) {
+  if (value === 'none') return value
+
+  const normalizedValue = unwrapArbitraryValue(value).trim()
+  const pxMatch = normalizedValue.match(/^(-?\d*\.?\d+)px$/)
+  if (pxMatch) return pxMatch[1]
+  return normalizedValue
+}
+
+function parseBorderWidthToken(token: string) {
+  if (token === 'border-none') {
+    return { target: 'all' as const, value: 'none' }
+  }
+
+  if (token === 'border') {
+    return { target: 'all' as const, value: '1px' }
+  }
+
+  const allMatch = token.match(/^border-(0|2|4|8|\[.+\])$/)
+  if (allMatch) {
+    return { target: 'all' as const, value: formatBorderWidthValueForInput(allMatch[1]) }
+  }
+
+  const sideMatch = token.match(/^border-([trblxy])$/)
+  if (sideMatch) {
+    return {
+      target: borderWidthShorthandToTarget(sideMatch[1]),
+      value: '1px',
+    }
+  }
+
+  const sideValueMatch = token.match(/^border-([trblxy])-(0|2|4|8|\[.+\])$/)
+  if (sideValueMatch) {
+    return {
+      target: borderWidthShorthandToTarget(sideValueMatch[1]),
+      value: formatBorderWidthValueForInput(sideValueMatch[2]),
+    }
+  }
+
+  return null
+}
+
+function borderWidthShorthandToTarget(value: string): BorderWidthTarget {
+  switch (value) {
+    case 't':
+      return 'top'
+    case 'r':
+      return 'right'
+    case 'b':
+      return 'bottom'
+    case 'l':
+      return 'left'
+    case 'x':
+      return 'x'
+    case 'y':
+      return 'y'
+    default:
+      return 'all'
+  }
+}
+
+function borderWidthTargetToTokenPrefix(target: BorderWidthTarget) {
+  switch (target) {
+    case 'all':
+      return 'border'
+    case 'top':
+      return 'border-t'
+    case 'right':
+      return 'border-r'
+    case 'bottom':
+      return 'border-b'
+    case 'left':
+      return 'border-l'
+    case 'x':
+      return 'border-x'
+    case 'y':
+      return 'border-y'
+  }
+}
+
+function normalizeBorderWidthValue(value: string) {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) return ''
+  if (trimmedValue === 'none') return 'none'
+  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
+  if (/^-?\d*\.?\d+$/.test(trimmedValue)) return `[${trimmedValue}px]`
+  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
+  return trimmedValue
+}
+
+function buildBorderWidthToken(target: BorderWidthTarget, value: string) {
+  const normalizedValue = normalizeBorderWidthValue(value)
+  if (!normalizedValue) return ''
+
+  if (normalizedValue === 'none') {
+    return target === 'all' ? 'border-none' : `${borderWidthTargetToTokenPrefix(target)}-0`
+  }
+
+  const rawValue = unwrapArbitraryValue(normalizedValue)
+  const prefix = borderWidthTargetToTokenPrefix(target)
+
+  if (rawValue === '1px') return prefix
+  if (rawValue === '0px') return `${prefix}-0`
+  if (rawValue === '2px') return `${prefix}-2`
+  if (rawValue === '4px') return `${prefix}-4`
+  if (rawValue === '8px') return `${prefix}-8`
+  return `${prefix}-[${rawValue}]`
+}
+
+function removeBorderWidthTokens(tokens: string[]) {
+  return tokens.filter((token) => parseBorderWidthToken(token) == null)
+}
+
+function removeSharedBorderWidthTokens(tokens: string[]) {
+  return tokens.filter((token) => parseBorderWidthToken(token)?.target !== 'all')
+}
+
+function borderWidthTokenPattern(target: BorderWidthTarget) {
+  const prefix = borderWidthTargetToTokenPrefix(target)
+  return new RegExp(`^${prefix}(?:-(?:0|2|4|8|\\[.+\\]))?$`)
+}
+
+function getBorderWidthState(tokens: string[]) {
+  let allValue = ''
+  let xValue = ''
+  let yValue = ''
+  let topExplicit = ''
+  let rightExplicit = ''
+  let bottomExplicit = ''
+  let leftExplicit = ''
+  let hasNone = false
+
+  tokens.forEach((token) => {
+    const parsedToken = parseBorderWidthToken(token)
+    if (!parsedToken) return
+
+    if (parsedToken.value === 'none') {
+      hasNone = true
+    }
+
+    switch (parsedToken.target) {
+      case 'all':
+        allValue = parsedToken.value
+        break
+      case 'x':
+        xValue = parsedToken.value
+        break
+      case 'y':
+        yValue = parsedToken.value
+        break
+      case 'top':
+        topExplicit = parsedToken.value
+        break
+      case 'right':
+        rightExplicit = parsedToken.value
+        break
+      case 'bottom':
+        bottomExplicit = parsedToken.value
+        break
+      case 'left':
+        leftExplicit = parsedToken.value
+        break
+    }
+  })
+
+  const effectiveTop = topExplicit || yValue || allValue
+  const effectiveRight = rightExplicit || xValue || allValue
+  const effectiveBottom = bottomExplicit || yValue || allValue
+  const effectiveLeft = leftExplicit || xValue || allValue
+  const hasSideOverrides = Boolean(topExplicit || rightExplicit || bottomExplicit || leftExplicit || xValue || yValue)
+  const isUniform =
+    Boolean(effectiveTop) &&
+    effectiveTop === effectiveRight &&
+    effectiveTop === effectiveBottom &&
+    effectiveTop === effectiveLeft
+
+  return {
+    allValue,
+    xValue,
+    yValue,
+    topExplicit,
+    rightExplicit,
+    bottomExplicit,
+    leftExplicit,
+    effectiveTop,
+    effectiveRight,
+    effectiveBottom,
+    effectiveLeft,
+    hasNone,
+    hasSideOverrides,
+    uniformValue: isUniform ? effectiveTop : '',
+  }
+}
+
+function nextBorderWidthCycleValue(value: string) {
+  const normalizedValue = unwrapArbitraryValue(value).trim()
+  const numericMatch = normalizedValue.match(/^(-?\d*\.?\d+)px$/)
+  if (numericMatch) {
+    const currentNumber = Number(numericMatch[1])
+    const nextNumber = currentNumber + 1
+    if (Number.isFinite(nextNumber)) {
+      if (nextNumber < 1) return '1px'
+      return `${nextNumber}px`
+    }
+  }
+
+  return '1px'
+}
+
+function borderWidthValueToPreviewCss(value: string) {
+  if (!value || value === 'none') return '0px'
+
+  const normalizedValue = unwrapArbitraryValue(value).trim()
+  const numericMatch = normalizedValue.match(/^(-?\d*\.?\d+)px$/)
+  if (!numericMatch) return normalizedValue
+
+  return Number(numericMatch[1]) > 0 ? '3px' : '0px'
+}
+
 function normalizeRadiusValue(value: string) {
   const trimmedValue = value.trim()
   if (!trimmedValue) return ''
@@ -432,7 +661,7 @@ function switchThumbClass(isActive: boolean) {
 }
 
 function tinyLabelClass() {
-  return 'text-[10px] font-medium leading-none text-black/60'
+  return '[font-family:var(--font-work-sans)] text-[11px] font-medium leading-[110%] text-black/70'
 }
 
 function fieldShellClass() {
@@ -595,6 +824,80 @@ function ColorChannelField({
         className="h-8 w-full rounded-lg bg-gray-100 px-2 text-[11px] font-medium text-black outline-none"
       />
     </label>
+  )
+}
+
+function BorderWeightField({
+  side,
+  value,
+  placeholder,
+  isActive,
+  onChange,
+  onActivate,
+  onRemove,
+}: {
+  side: BorderWidthSide
+  value: string
+  placeholder: string
+  isActive: boolean
+  onChange: (value: string) => void
+  onActivate: () => void
+  onRemove: () => void
+}) {
+  const isVertical = side === 'top' || side === 'bottom'
+  const displayValue = formatBorderWidthValueForDisplay(value)
+  const displayPlaceholder = formatBorderWidthValueForDisplay(placeholder)
+  const hasExplicitValue = Boolean(value)
+  const wrapperClass = [
+    'rounded-[4px] px-0.5 py-1.5 transition',
+    hasExplicitValue ? 'bg-[#f1f3f4]' : 'bg-[#f1f3f4]/35',
+    isVertical ? 'flex flex-col items-center gap-px' : 'flex items-center gap-px',
+  ].join(' ')
+  const actionButton = (
+    <button
+      type="button"
+      onClick={hasExplicitValue ? onRemove : onActivate}
+      className="grid h-[20px] w-[20px] shrink-0 place-items-center self-center rounded text-black transition"
+      aria-label={
+        hasExplicitValue
+          ? `Remove ${side} border width`
+          : `Use an independent ${side} border width`
+      }
+      title={
+        hasExplicitValue
+          ? `Remove ${side} border width`
+          : `Use an independent ${side} border width`
+      }
+    >
+      <span className="block text-[20px] font-normal leading-none">
+        {hasExplicitValue ? '−' : '+'}
+      </span>
+    </button>
+  )
+
+  return (
+    <div className={wrapperClass}>
+      {side === 'left' || side === 'top' ? actionButton : null}
+      <input
+        value={displayValue}
+        onChange={(event) => onChange(event.target.value)}
+        onFocus={(event) => {
+          event.currentTarget.select()
+        }}
+        className={[
+          'bg-transparent text-[14px] font-semibold leading-[140%] text-black outline-none placeholder:text-black/20',
+          'opacity-100',
+          isVertical
+            ? 'h-[13px] w-full text-center'
+            : hasExplicitValue
+              ? 'h-[13px] w-full text-center'
+              : 'h-[13px] min-w-0 flex-1 text-center',
+        ].join(' ')}
+        placeholder={displayPlaceholder}
+        aria-label={`${side} border width`}
+      />
+      {side === 'right' || side === 'bottom' ? actionButton : null}
+    </div>
   )
 }
 
@@ -1149,15 +1452,54 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const backgroundPreviewColor = resolveTailwindColorValue(backgroundDetails.colorValue)
   const backgroundPreviewOpacity = Number.parseInt(backgroundDetails.opacityValue, 10)
   const backgroundPickerBaseColor = backgroundPreviewColor ?? '#ffffff'
+  const hasBackgroundColor = Boolean(backgroundDetails.colorValue)
   const borderColorClass = findToken(
     classTokens,
-    /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/
+    /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$)(?!none$).+/
   )
   const borderDetails = parseBorderColorToken(borderColorClass)
   const borderPreviewColor = resolveTailwindColorValue(borderDetails.colorValue)
   const borderPreviewOpacity = Number.parseInt(borderDetails.opacityValue, 10)
   const borderPickerBaseColor = borderPreviewColor ?? '#d4d4d8'
-  const borderWeightClass = findToken(classTokens, /^border(?:-(?:0|2|4|8))?$/) || 'border'
+  const hasBorderColor = Boolean(borderDetails.colorValue)
+  const borderWidthState = getBorderWidthState(classTokens)
+  const hasBorderNone = classTokens.includes('border-none')
+  const centerBorderWeightValue =
+    !borderWidthState.hasSideOverrides && borderWidthState.allValue !== 'none'
+      ? formatBorderWidthValueForDisplay(borderWidthState.allValue)
+      : ''
+  const isCenterBorderWeightActive = Boolean(centerBorderWeightValue)
+  const centerBorderWeightPlaceholder = hasBorderNone
+    ? 'none'
+    : borderWidthState.hasSideOverrides
+      ? ''
+      : formatBorderWidthValueForDisplay(borderWidthState.allValue || '')
+  const borderWeightPreviewStyle = borderWidthState.hasSideOverrides
+    ? {
+        borderTopWidth: borderWidthValueToPreviewCss(borderWidthState.topExplicit),
+        borderRightWidth: borderWidthValueToPreviewCss(borderWidthState.rightExplicit),
+        borderBottomWidth: borderWidthValueToPreviewCss(borderWidthState.bottomExplicit),
+        borderLeftWidth: borderWidthValueToPreviewCss(borderWidthState.leftExplicit),
+        borderStyle: 'solid',
+        borderColor: '#454545',
+      }
+    : borderWidthState.allValue && borderWidthState.allValue !== 'none'
+      ? {
+          borderWidth: borderWidthValueToPreviewCss(borderWidthState.allValue),
+          borderStyle: 'solid',
+          borderColor: '#454545',
+        }
+      : hasBorderNone
+        ? {
+            borderWidth: '0px',
+            borderStyle: 'solid',
+            borderColor: '#454545',
+          }
+        : {
+            borderWidth: '1px',
+            borderStyle: 'dashed',
+            borderColor: '#d4d4d4',
+          }
   const minWidthClass = findToken(classTokens, /^min-w-.+/)
   const maxWidthClass = findToken(classTokens, /^max-w-.+/)
   const minHeightClass = findToken(classTokens, /^min-h-.+/)
@@ -1355,6 +1697,55 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     updateSelectedStyle(nextTokens)
   }
 
+  const updateBorderWidth = (target: BorderWidthTarget, nextValue: string) => {
+    if (target === 'all') {
+      const nextTokens = removeBorderWidthTokens(classTokens)
+      const nextToken = buildBorderWidthToken('all', nextValue)
+      updateSelectedStyle(nextToken ? [...nextTokens, nextToken] : nextTokens)
+      return
+    }
+
+    const nextToken = buildBorderWidthToken(target, nextValue)
+    const nextTokens = replaceTokens(
+      classTokens,
+      borderWidthTokenPattern(target),
+      nextToken ? [nextToken] : []
+    )
+    updateSelectedStyle(nextTokens)
+  }
+
+  const activateSideBorderWidth = (side: BorderWidthSide) => {
+    const sideValue =
+      side === 'top'
+        ? borderWidthState.topExplicit
+        : side === 'right'
+          ? borderWidthState.rightExplicit
+          : side === 'bottom'
+            ? borderWidthState.bottomExplicit
+            : borderWidthState.leftExplicit
+
+    if (sideValue) {
+      updateBorderWidth(side, nextBorderWidthCycleValue(sideValue))
+      return
+    }
+
+    const fallbackValue =
+      (side === 'top'
+        ? borderWidthState.effectiveTop
+        : side === 'right'
+          ? borderWidthState.effectiveRight
+          : side === 'bottom'
+            ? borderWidthState.effectiveBottom
+            : borderWidthState.effectiveLeft) ||
+      borderWidthState.uniformValue ||
+      borderWidthState.allValue ||
+      '1px'
+
+    const nextTokens = removeSharedBorderWidthTokens(classTokens)
+    const nextToken = buildBorderWidthToken(side, fallbackValue === 'none' ? '1px' : fallbackValue)
+    updateSelectedStyle(nextToken ? [...nextTokens, nextToken] : nextTokens)
+  }
+
   const handleBackgroundColorChange = (nextValue: string) => {
     updateSingleField(
       /^bg-(?!clip-padding$).+/,
@@ -1371,7 +1762,12 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
   const handleAddBackgroundColor = () => {
     if (backgroundDetails.colorValue) return
-    updateSingleField(/^bg-(?!clip-padding$).+/, 'bg-emerald-100')
+    updateSingleField(/^bg-(?!clip-padding$).+/, 'bg-neutral-100')
+  }
+
+  const handleRemoveBackgroundColor = () => {
+    updateSingleField(/^bg-(?!clip-padding$).+/, '')
+    setIsBackgroundPickerOpen(false)
   }
 
   const applyBackgroundPickerColor = (nextColorValue: string) => {
@@ -1451,24 +1847,43 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
   const handleBorderColorChange = (nextValue: string) => {
     updateSingleField(
-      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
+      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$)(?!none$).+/,
       buildBorderColorToken(nextValue, borderDetails.opacityValue)
     )
   }
 
   const handleBorderOpacityChange = (nextValue: string) => {
     updateSingleField(
-      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
+      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$)(?!none$).+/,
       buildBorderColorToken(borderDetails.colorValue, nextValue)
     )
   }
 
   const handleAddBorderColor = () => {
-    if (borderDetails.colorValue) return
-    updateSingleField(
-      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$).+/,
-      'border-emerald-100'
+    const nextTokens = [...classTokens]
+    const withoutBorderColor = replaceTokens(
+      nextTokens,
+      /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$)(?!none$).+/,
+      borderDetails.colorValue ? [] : ['border-neutral-800']
     )
+    const withoutBorderNone = withoutBorderColor.filter((token) => token !== 'border-none')
+    const nextBorderState = getBorderWidthState(withoutBorderNone)
+    const hasAnyBorderWidth = nextBorderState.allValue || nextBorderState.hasSideOverrides
+
+    updateSelectedStyle(hasAnyBorderWidth ? withoutBorderNone : [...withoutBorderNone, 'border'])
+  }
+
+  const handleRemoveBorderColor = () => {
+    const nextTokens = classTokens.filter((token) => {
+      if (/^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$)(?!none$).+/.test(token)) {
+        return false
+      }
+
+      return parseBorderWidthToken(token) == null
+    })
+
+    updateSelectedStyle(nextTokens)
+    setIsBorderPickerOpen(false)
   }
 
   const applyBorderPickerColor = (nextColorValue: string) => {
@@ -1953,7 +2368,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               </div>
             </section>
 
-            <section className="space-y-4 border-b border-zinc-200 pb-5">
+            <section className="space-y-5 border-b border-zinc-200 pb-5">
               <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Limits</p>
 
               <div className="flex items-center gap-3">
@@ -1972,13 +2387,13 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3">
                   <span className={tinyLabelClass()}>Padding</span>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1">
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
                     {(['axes', 'sides'] as const).map((mode) => (
                       <button
                         key={mode}
                         type="button"
                         onClick={() => handlePaddingModeChange(mode)}
-                        className={`rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
                           paddingMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
                         }`}
                       >
@@ -2050,13 +2465,13 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3">
                   <span className={tinyLabelClass()}>Corner radius</span>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1">
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
                     {(['linked', 'independent'] as const).map((mode) => (
                       <button
                         key={mode}
                         type="button"
                         onClick={() => handleCornerRadiusModeChange(mode)}
-                        className={`rounded-md px-2 py-1 text-[11px] font-semibold transition ${
+                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
                           cornerRadiusMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
                         }`}
                       >
@@ -2124,9 +2539,10 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               </div>
 
               <div className="space-y-3">
+                <div className={`${tinyLabelClass()}`}>Dimension Restrictions</div>
                 <div className="space-y-2">
                   <div className="relative flex items-center gap-2">
-                    <span className={`flex-1 ${tinyLabelClass()}`}>Width Max/Min</span>
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Width (Max/Min)</span>
                     <button
                       type="button"
                       onClick={() =>
@@ -2186,7 +2602,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
                 <div className="space-y-2">
                   <div className="relative flex items-center gap-2">
-                    <span className={`flex-1 ${tinyLabelClass()}`}>Height Max/Min</span>
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Height (Max/Min)</span>
                     <button
                       type="button"
                       onClick={() =>
@@ -2256,11 +2672,12 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   +
                 </button>
               </div>
-              <div className="flex gap-1">
-                <BackgroundColorCombobox
-                  value={backgroundDetails.colorValue}
-                  onChange={handleBackgroundColorChange}
-                />
+              {hasBackgroundColor && (
+                <div className="flex gap-1">
+                  <BackgroundColorCombobox
+                    value={backgroundDetails.colorValue}
+                    onChange={handleBackgroundColorChange}
+                  />
                 <input
                   value={`${backgroundDetails.opacityValue}%`}
                   onChange={(event) => handleBackgroundOpacityChange(event.target.value)}
@@ -2272,144 +2689,154 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   <button
                     type="button"
                     onClick={() => setIsBackgroundPickerOpen((prev) => !prev)}
-                    className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
-                    aria-label="Open background color picker"
-                    title="Open background color picker"
-                  >
-                    <div
-                      className="w-full"
-                      style={{
-                        backgroundColor: backgroundPreviewColor ?? 'transparent',
-                        opacity: Number.isNaN(backgroundPreviewOpacity)
-                          ? 1
-                          : Math.min(100, Math.max(0, backgroundPreviewOpacity)) / 100,
-                      }}
-                    />
-                  </button>
-                  {isBackgroundPickerOpen && (
-                    <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
-                      <div className="space-y-3">
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="color"
-                              value={backgroundPickerDraft.hex}
-                              onChange={(event) => {
-                                const nextValue = event.target.value
-                                setBackgroundPickerDraft(buildBackgroundPickerDraft(nextValue))
-                                applyBackgroundPickerColor(nextValue)
-                              }}
-                              className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
-                              aria-label="Pick background color"
-                            />
-                            <div
-                              className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
-                              aria-label="Background color preview"
-                              title="Background color preview"
-                              style={{
-                                backgroundColor: '#f4f4f5',
-                                backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
-                                backgroundSize: '8px 8px',
-                              }}
-                            >
-                              <div
-                                className="absolute inset-0"
-                                style={{
-                                  backgroundColor: backgroundPreviewColor ?? 'transparent',
-                                  opacity: Number.isNaN(backgroundPreviewOpacity)
-                                    ? 1
-                                    : Math.min(100, Math.max(0, backgroundPreviewOpacity)) / 100,
+                      className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
+                      aria-label="Open background color picker"
+                      title="Open background color picker"
+                    >
+                      <div
+                        className="w-full"
+                        style={{
+                          backgroundColor: backgroundPreviewColor ?? 'transparent',
+                          opacity: Number.isNaN(backgroundPreviewOpacity)
+                            ? 1
+                            : Math.min(100, Math.max(0, backgroundPreviewOpacity)) / 100,
+                        }}
+                      />
+                    </button>
+                    {isBackgroundPickerOpen && (
+                      <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                        <div className="space-y-3">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="color"
+                                value={backgroundPickerDraft.hex}
+                                onChange={(event) => {
+                                  const nextValue = event.target.value
+                                  setBackgroundPickerDraft(buildBackgroundPickerDraft(nextValue))
+                                  applyBackgroundPickerColor(nextValue)
                                 }}
+                                className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
+                                aria-label="Pick background color"
                               />
+                              <div
+                                className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
+                                aria-label="Background color preview"
+                                title="Background color preview"
+                                style={{
+                                  backgroundColor: '#f4f4f5',
+                                  backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
+                                  backgroundSize: '8px 8px',
+                                }}
+                              >
+                                <div
+                                  className="absolute inset-0"
+                                  style={{
+                                    backgroundColor: backgroundPreviewColor ?? 'transparent',
+                                    opacity: Number.isNaN(backgroundPreviewOpacity)
+                                      ? 1
+                                      : Math.min(100, Math.max(0, backgroundPreviewOpacity)) / 100,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
+                              {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={() => setBackgroundPickerMode(mode)}
+                                  className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
+                                    backgroundPickerMode === mode
+                                      ? 'bg-white text-black shadow-sm'
+                                      : 'text-zinc-500'
+                                  }`}
+                                >
+                                  {mode}
+                                </button>
+                              ))}
                             </div>
                           </div>
-                          <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
-                            {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={() => setBackgroundPickerMode(mode)}
-                                className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
-                                  backgroundPickerMode === mode
-                                    ? 'bg-white text-black shadow-sm'
-                                    : 'text-zinc-500'
-                                }`}
-                              >
-                                {mode}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
 
-                        <BackgroundColorMap
-                          mode={backgroundPickerMode}
-                          draft={backgroundPickerDraft}
-                          onRgbChange={handleBackgroundPickerRgbChange}
-                          onHslChange={handleBackgroundPickerHslChange}
-                        />
-
-                        <BackgroundOpacitySlider
-                          colorValue={backgroundDetails.colorValue}
-                          opacityValue={backgroundDetails.opacityValue}
-                          onChange={handleBackgroundOpacityChange}
-                        />
-
-                        {backgroundPickerMode === 'hex' && (
-                          <ColorChannelField
-                            label="Hex"
-                            value={backgroundPickerDraft.hex}
-                            onChange={handleBackgroundPickerHexChange}
+                          <BackgroundColorMap
+                            mode={backgroundPickerMode}
+                            draft={backgroundPickerDraft}
+                            onRgbChange={handleBackgroundPickerRgbChange}
+                            onHslChange={handleBackgroundPickerHslChange}
                           />
-                        )}
 
-                        {backgroundPickerMode === 'rgb' && (
-                          <div className="grid grid-cols-3 gap-2">
-                            <ColorChannelField
-                              label="R"
-                              value={backgroundPickerDraft.red}
-                              onChange={(value) => handleBackgroundPickerRgbChange('red', value)}
-                            />
-                            <ColorChannelField
-                              label="G"
-                              value={backgroundPickerDraft.green}
-                              onChange={(value) => handleBackgroundPickerRgbChange('green', value)}
-                            />
-                            <ColorChannelField
-                              label="B"
-                              value={backgroundPickerDraft.blue}
-                              onChange={(value) => handleBackgroundPickerRgbChange('blue', value)}
-                            />
-                          </div>
-                        )}
+                          <BackgroundOpacitySlider
+                            colorValue={backgroundDetails.colorValue}
+                            opacityValue={backgroundDetails.opacityValue}
+                            onChange={handleBackgroundOpacityChange}
+                          />
 
-                        {backgroundPickerMode === 'hsl' && (
-                          <div className="grid grid-cols-3 gap-2">
+                          {backgroundPickerMode === 'hex' && (
                             <ColorChannelField
-                              label="H"
-                              value={backgroundPickerDraft.hue}
-                              onChange={(value) => handleBackgroundPickerHslChange('hue', value)}
+                              label="Hex"
+                              value={backgroundPickerDraft.hex}
+                              onChange={handleBackgroundPickerHexChange}
                             />
-                            <ColorChannelField
-                              label="S"
-                              value={backgroundPickerDraft.saturation}
-                              onChange={(value) =>
-                                handleBackgroundPickerHslChange('saturation', value)
-                              }
-                            />
-                            <ColorChannelField
-                              label="L"
-                              value={backgroundPickerDraft.lightness}
-                              onChange={(value) =>
-                                handleBackgroundPickerHslChange('lightness', value)
-                              }
-                            />
-                          </div>
-                        )}
+                          )}
+
+                          {backgroundPickerMode === 'rgb' && (
+                            <div className="grid grid-cols-3 gap-2">
+                              <ColorChannelField
+                                label="R"
+                                value={backgroundPickerDraft.red}
+                                onChange={(value) => handleBackgroundPickerRgbChange('red', value)}
+                              />
+                              <ColorChannelField
+                                label="G"
+                                value={backgroundPickerDraft.green}
+                                onChange={(value) => handleBackgroundPickerRgbChange('green', value)}
+                              />
+                              <ColorChannelField
+                                label="B"
+                                value={backgroundPickerDraft.blue}
+                                onChange={(value) => handleBackgroundPickerRgbChange('blue', value)}
+                              />
+                            </div>
+                          )}
+
+                          {backgroundPickerMode === 'hsl' && (
+                            <div className="grid grid-cols-3 gap-2">
+                              <ColorChannelField
+                                label="H"
+                                value={backgroundPickerDraft.hue}
+                                onChange={(value) => handleBackgroundPickerHslChange('hue', value)}
+                              />
+                              <ColorChannelField
+                                label="S"
+                                value={backgroundPickerDraft.saturation}
+                                onChange={(value) =>
+                                  handleBackgroundPickerHslChange('saturation', value)
+                                }
+                              />
+                              <ColorChannelField
+                                label="L"
+                                value={backgroundPickerDraft.lightness}
+                                onChange={(value) =>
+                                  handleBackgroundPickerHslChange('lightness', value)
+                                }
+                              />
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveBackgroundColor}
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded-lg bg-gray-100 text-xs font-semibold text-zinc-500 transition hover:text-black"
+                    aria-label="Remove background color"
+                    title="Remove background color"
+                  >
+                    ×
+                  </button>
                 </div>
-              </div>
+              )}
             </section>
 
             <section className="space-y-4">
@@ -2426,11 +2853,12 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                 </button>
               </div>
 
-              <div className="flex gap-1">
-                <BackgroundColorCombobox
-                  value={borderDetails.colorValue}
-                  onChange={handleBorderColorChange}
-                />
+              {hasBorderColor && (
+                <div className="flex gap-1">
+                  <BackgroundColorCombobox
+                    value={borderDetails.colorValue}
+                    onChange={handleBorderColorChange}
+                  />
                 <input
                   value={`${borderDetails.opacityValue}%`}
                   onChange={(event) => handleBorderOpacityChange(event.target.value)}
@@ -2442,162 +2870,233 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   <button
                     type="button"
                     onClick={() => setIsBorderPickerOpen((prev) => !prev)}
-                    className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
-                    aria-label="Open border color picker"
-                    title="Open border color picker"
-                  >
-                    <div
-                      className="w-full"
-                      style={{
-                        backgroundColor: borderPreviewColor ?? 'transparent',
-                        opacity: Number.isNaN(borderPreviewOpacity)
-                          ? 1
-                          : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
-                      }}
-                    />
-                  </button>
-                  {isBorderPickerOpen && (
-                    <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
-                      <div className="space-y-3">
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="color"
-                              value={borderPickerDraft.hex}
-                              onChange={(event) => {
-                                const nextValue = event.target.value
-                                setBorderPickerDraft(buildBackgroundPickerDraft(nextValue))
-                                applyBorderPickerColor(nextValue)
-                              }}
-                              className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
-                              aria-label="Pick border color"
-                            />
-                            <div
-                              className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
-                              aria-label="Border color preview"
-                              title="Border color preview"
-                              style={{
-                                backgroundColor: '#f4f4f5',
-                                backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
-                                backgroundSize: '8px 8px',
-                              }}
-                            >
-                              <div
-                                className="absolute inset-0"
-                                style={{
-                                  backgroundColor: borderPreviewColor ?? 'transparent',
-                                  opacity: Number.isNaN(borderPreviewOpacity)
-                                    ? 1
-                                    : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+                      className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
+                      aria-label="Open border color picker"
+                      title="Open border color picker"
+                    >
+                      <div
+                        className="w-full"
+                        style={{
+                          backgroundColor: borderPreviewColor ?? 'transparent',
+                          opacity: Number.isNaN(borderPreviewOpacity)
+                            ? 1
+                            : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+                        }}
+                      />
+                    </button>
+                    {isBorderPickerOpen && (
+                      <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                        <div className="space-y-3">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="color"
+                                value={borderPickerDraft.hex}
+                                onChange={(event) => {
+                                  const nextValue = event.target.value
+                                  setBorderPickerDraft(buildBackgroundPickerDraft(nextValue))
+                                  applyBorderPickerColor(nextValue)
                                 }}
+                                className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
+                                aria-label="Pick border color"
                               />
+                              <div
+                                className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
+                                aria-label="Border color preview"
+                                title="Border color preview"
+                                style={{
+                                  backgroundColor: '#f4f4f5',
+                                  backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
+                                  backgroundSize: '8px 8px',
+                                }}
+                              >
+                                <div
+                                  className="absolute inset-0"
+                                  style={{
+                                    backgroundColor: borderPreviewColor ?? 'transparent',
+                                    opacity: Number.isNaN(borderPreviewOpacity)
+                                      ? 1
+                                      : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
+                              {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={() => setBorderPickerMode(mode)}
+                                  className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
+                                    borderPickerMode === mode
+                                      ? 'bg-white text-black shadow-sm'
+                                      : 'text-zinc-500'
+                                  }`}
+                                >
+                                  {mode}
+                                </button>
+                              ))}
                             </div>
                           </div>
-                          <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
-                            {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={() => setBorderPickerMode(mode)}
-                                className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
-                                  borderPickerMode === mode
-                                    ? 'bg-white text-black shadow-sm'
-                                    : 'text-zinc-500'
-                                }`}
-                              >
-                                {mode}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
 
-                        <BackgroundColorMap
-                          mode={borderPickerMode}
-                          draft={borderPickerDraft}
-                          onRgbChange={handleBorderPickerRgbChange}
-                          onHslChange={handleBorderPickerHslChange}
-                        />
-
-                        <BackgroundOpacitySlider
-                          colorValue={borderDetails.colorValue}
-                          opacityValue={borderDetails.opacityValue}
-                          onChange={handleBorderOpacityChange}
-                        />
-
-                        {borderPickerMode === 'hex' && (
-                          <ColorChannelField
-                            label="Hex"
-                            value={borderPickerDraft.hex}
-                            onChange={handleBorderPickerHexChange}
+                          <BackgroundColorMap
+                            mode={borderPickerMode}
+                            draft={borderPickerDraft}
+                            onRgbChange={handleBorderPickerRgbChange}
+                            onHslChange={handleBorderPickerHslChange}
                           />
-                        )}
+                          {borderPickerMode === 'hsl' && (
+                            <div className="grid grid-cols-3 gap-2">
+                              <ColorChannelField
+                                label="H"
+                                value={borderPickerDraft.hue}
+                                onChange={(value) => handleBorderPickerHslChange('hue', value)}
+                              />
+                              <ColorChannelField
+                                label="S"
+                                value={borderPickerDraft.saturation}
+                                onChange={(value) =>
+                                  handleBorderPickerHslChange('saturation', value)
+                                }
+                              />
+                              <ColorChannelField
+                                label="L"
+                                value={borderPickerDraft.lightness}
+                                onChange={(value) =>
+                                  handleBorderPickerHslChange('lightness', value)
+                                }
+                              />
+                            </div>
+                          )}
 
-                        {borderPickerMode === 'rgb' && (
-                          <div className="grid grid-cols-3 gap-2">
-                            <ColorChannelField
-                              label="R"
-                              value={borderPickerDraft.red}
-                              onChange={(value) => handleBorderPickerRgbChange('red', value)}
-                            />
-                            <ColorChannelField
-                              label="G"
-                              value={borderPickerDraft.green}
-                              onChange={(value) => handleBorderPickerRgbChange('green', value)}
-                            />
-                            <ColorChannelField
-                              label="B"
-                              value={borderPickerDraft.blue}
-                              onChange={(value) => handleBorderPickerRgbChange('blue', value)}
-                            />
-                          </div>
-                        )}
+                          <BackgroundOpacitySlider
+                            colorValue={borderDetails.colorValue}
+                            opacityValue={borderDetails.opacityValue}
+                            onChange={handleBorderOpacityChange}
+                          />
 
-                        {borderPickerMode === 'hsl' && (
-                          <div className="grid grid-cols-3 gap-2">
+                          {borderPickerMode === 'hex' && (
                             <ColorChannelField
-                              label="H"
-                              value={borderPickerDraft.hue}
-                              onChange={(value) => handleBorderPickerHslChange('hue', value)}
+                              label="Hex"
+                              value={borderPickerDraft.hex}
+                              onChange={handleBorderPickerHexChange}
                             />
-                            <ColorChannelField
-                              label="S"
-                              value={borderPickerDraft.saturation}
-                              onChange={(value) =>
-                                handleBorderPickerHslChange('saturation', value)
-                              }
-                            />
-                            <ColorChannelField
-                              label="L"
-                              value={borderPickerDraft.lightness}
-                              onChange={(value) =>
-                                handleBorderPickerHslChange('lightness', value)
-                              }
-                            />
-                          </div>
-                        )}
+                          )}
+
+                          {borderPickerMode === 'rgb' && (
+                            <div className="grid grid-cols-3 gap-2">
+                              <ColorChannelField
+                                label="R"
+                                value={borderPickerDraft.red}
+                                onChange={(value) => handleBorderPickerRgbChange('red', value)}
+                              />
+                              <ColorChannelField
+                                label="G"
+                                value={borderPickerDraft.green}
+                                onChange={(value) => handleBorderPickerRgbChange('green', value)}
+                              />
+                              <ColorChannelField
+                                label="B"
+                                value={borderPickerDraft.blue}
+                                onChange={(value) => handleBorderPickerRgbChange('blue', value)}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveBorderColor}
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded-lg bg-gray-100 text-xs font-semibold text-zinc-500 transition hover:text-black"
+                    aria-label="Remove border color"
+                    title="Remove border color"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
+              {hasBorderColor && (
+                <div className="space-y-1">
+                  <span className={tinyLabelClass()}>Border-weight</span>
+                  <div className="px-1 py-2">
+                    <div className="relative grid grid-cols-[50px_1fr_50px] grid-rows-[46px_30px_46px] gap-x-[6px] gap-y-1 px-[10px] py-[8px]">
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 rounded-[4px]"
+                        style={borderWeightPreviewStyle}
+                      />
+
+                      <div className="col-start-2 row-start-1">
+                        <BorderWeightField
+                          side="top"
+                          value={borderWidthState.topExplicit}
+                          placeholder={borderWidthState.effectiveTop || centerBorderWeightPlaceholder || '1px'}
+                          isActive={Boolean(borderWidthState.topExplicit)}
+                          onChange={(value) => updateBorderWidth('top', value)}
+                          onActivate={() => activateSideBorderWidth('top')}
+                          onRemove={() => updateBorderWidth('top', '')}
+                        />
+                      </div>
+
+                      <div className="col-start-1 row-start-2">
+                        <BorderWeightField
+                          side="left"
+                          value={borderWidthState.leftExplicit}
+                          placeholder={borderWidthState.effectiveLeft || centerBorderWeightPlaceholder || '1px'}
+                          isActive={Boolean(borderWidthState.leftExplicit)}
+                          onChange={(value) => updateBorderWidth('left', value)}
+                          onActivate={() => activateSideBorderWidth('left')}
+                          onRemove={() => updateBorderWidth('left', '')}
+                        />
+                      </div>
+
+                      <div
+                        className={`col-start-2 row-start-2 flex items-center justify-center rounded-[4px] bg-[#f1f3f4] px-2 py-1.5 transition ${
+                          isCenterBorderWeightActive ? 'opacity-100' : 'opacity-35 focus-within:opacity-100'
+                        }`}
+                      >
+                        <input
+                          value={centerBorderWeightValue}
+                          onChange={(event) => updateBorderWidth('all', event.target.value)}
+                          onFocus={(event) => {
+                            event.currentTarget.select()
+                          }}
+                          className="h-[18px] w-full bg-transparent text-center text-[14px] font-medium leading-[140%] text-black outline-none placeholder:text-black/40"
+                          placeholder={centerBorderWeightPlaceholder}
+                          aria-label="Border width for all sides"
+                        />
+                      </div>
+
+                      <div className="col-start-3 row-start-2">
+                        <BorderWeightField
+                          side="right"
+                          value={borderWidthState.rightExplicit}
+                          placeholder={borderWidthState.effectiveRight || centerBorderWeightPlaceholder || '1px'}
+                          isActive={Boolean(borderWidthState.rightExplicit)}
+                          onChange={(value) => updateBorderWidth('right', value)}
+                          onActivate={() => activateSideBorderWidth('right')}
+                          onRemove={() => updateBorderWidth('right', '')}
+                        />
+                      </div>
+
+                      <div className="col-start-2 row-start-3">
+                        <BorderWeightField
+                          side="bottom"
+                          value={borderWidthState.bottomExplicit}
+                          placeholder={borderWidthState.effectiveBottom || centerBorderWeightPlaceholder || '1px'}
+                          isActive={Boolean(borderWidthState.bottomExplicit)}
+                          onChange={(value) => updateBorderWidth('bottom', value)}
+                          onActivate={() => activateSideBorderWidth('bottom')}
+                          onRemove={() => updateBorderWidth('bottom', '')}
+                        />
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
-              </div>
-
-              <div className="space-y-1">
-                <span className={tinyLabelClass()}>Border-weight</span>
-                <div className="grid grid-cols-2 gap-2 rounded-xl border border-dashed border-gray-800 p-2">
-                  {BORDER_WEIGHT_OPTIONS.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => updateSingleField(/^border(?:-(?:0|2|4|8))?$/, option)}
-                      className={`rounded-md px-3 py-2 text-sm font-medium transition ${
-                        borderWeightClass === option ? 'bg-gray-100 text-black' : 'bg-gray-100/50 text-zinc-400'
-                      }`}
-                    >
-                      {option === 'border' ? '1px' : option.replace('border-', '')}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              )}
             </section>
 
             <section className="space-y-2 border-t border-zinc-200 pt-5">
