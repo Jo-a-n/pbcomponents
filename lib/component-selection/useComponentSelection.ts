@@ -46,24 +46,35 @@ function findGroupForComponent(componentHierarchy: ComponentGroup[], componentNa
   )
 }
 
-function applySelectionStyles(root: HTMLDivElement, selectedComponent: string | null) {
-  root.querySelectorAll('[data-codex-selected="true"]').forEach((el) => {
-    el.classList.remove('ring-2', 'ring-blue-500', 'bg-blue-50')
-    el.removeAttribute('data-codex-selected')
-  })
-
-  if (!selectedComponent) return
+function getSelectedElements(root: HTMLDivElement, selectedComponent: string | null) {
+  if (!selectedComponent) return [] as Element[]
 
   const slot = componentNameToSlot(selectedComponent)
-  root.querySelectorAll(`[data-slot="${slot}"]`).forEach((el) => {
-    el.classList.add('ring-2', 'ring-blue-500', 'bg-blue-50')
-    el.setAttribute('data-codex-selected', 'true')
+  return Array.from(root.querySelectorAll(`[data-slot="${slot}"]`))
+}
+
+function syncSelectionAttributes(
+  previousElements: Element[],
+  nextElements: Element[]
+) {
+  previousElements.forEach((element) => {
+    if (!nextElements.includes(element)) {
+      element.removeAttribute('data-codex-selected')
+    }
+  })
+
+  nextElements.forEach((element) => {
+    if (!previousElements.includes(element)) {
+      element.setAttribute('data-codex-selected', 'true')
+    }
   })
 }
 
 export function useComponentSelection({ componentHierarchy }: UseComponentSelectionOptions) {
   const [selectedComponent, setSelectedComponent] = useState<string | null>(null)
   const canvasRef = useRef<HTMLDivElement | null>(null)
+  const selectedComponentRef = useRef<string | null>(null)
+  const selectedElementsRef = useRef<Element[]>([])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -135,26 +146,47 @@ export function useComponentSelection({ componentHierarchy }: UseComponentSelect
   }
 
   useEffect(() => {
+    selectedComponentRef.current = selectedComponent
+
     const root = canvasRef.current
     if (!root) return
 
-    applySelectionStyles(root, selectedComponent)
+    const nextSelectedElements = getSelectedElements(root, selectedComponent)
+    syncSelectionAttributes(selectedElementsRef.current, nextSelectedElements)
+    selectedElementsRef.current = nextSelectedElements
+  }, [selectedComponent])
 
+  useEffect(() => {
+    const root = canvasRef.current
+    if (!root) return
+
+    let animationFrameId = 0
     const observer = new MutationObserver(() => {
-      applySelectionStyles(root, selectedComponent)
+      if (animationFrameId) return
+
+      animationFrameId = window.requestAnimationFrame(() => {
+        animationFrameId = 0
+        const nextSelectedElements = getSelectedElements(root, selectedComponentRef.current)
+        syncSelectionAttributes(selectedElementsRef.current, nextSelectedElements)
+        selectedElementsRef.current = nextSelectedElements
+      })
     })
 
     observer.observe(root, {
       childList: true,
       subtree: true,
-      attributes: true,
-      attributeFilter: ['class'],
     })
 
     return () => {
+      if (animationFrameId) {
+        window.cancelAnimationFrame(animationFrameId)
+      }
+
       observer.disconnect()
+      syncSelectionAttributes(selectedElementsRef.current, [])
+      selectedElementsRef.current = []
     }
-  }, [selectedComponent])
+  }, [])
 
   return {
     selectedComponent,

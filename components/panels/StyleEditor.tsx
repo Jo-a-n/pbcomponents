@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import tailwindColors from 'tailwindcss/colors'
 import type { ComponentGroup } from '@/lib/component-selection/types'
 import {
@@ -831,7 +831,6 @@ function BorderWeightField({
   side,
   value,
   placeholder,
-  isActive,
   onChange,
   onActivate,
   onRemove,
@@ -839,7 +838,6 @@ function BorderWeightField({
   side: BorderWidthSide
   value: string
   placeholder: string
-  isActive: boolean
   onChange: (value: string) => void
   onActivate: () => void
   onRemove: () => void
@@ -908,6 +906,7 @@ function BackgroundColorCombobox({
   value: string
   onChange: (value: string) => void
 }) {
+  const listboxId = useId()
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
@@ -924,10 +923,6 @@ function BackgroundColorCombobox({
       option.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
     )
   )
-
-  useEffect(() => {
-    setHighlightedIndex(0)
-  }, [value])
 
   useEffect(() => {
     if (!isOpen) return
@@ -949,10 +944,12 @@ function BackgroundColorCombobox({
       <input
         value={value}
         onChange={(event) => {
+          setHighlightedIndex(0)
           onChange(event.target.value)
           setIsOpen(true)
         }}
         onFocus={() => {
+          setHighlightedIndex(0)
           setIsOpen(true)
         }}
         onKeyDown={(event) => {
@@ -994,6 +991,7 @@ function BackgroundColorCombobox({
         className="h-6 w-full rounded-lg bg-gray-100 px-3 text-[10px] font-medium text-black/70 outline-none"
         placeholder="emerald-100"
         aria-label="Background color"
+        aria-controls={isOpen && filteredOptions.length > 0 ? listboxId : undefined}
         aria-expanded={isOpen && filteredOptions.length > 0}
         aria-autocomplete="list"
         aria-haspopup="listbox"
@@ -1002,7 +1000,12 @@ function BackgroundColorCombobox({
 
       {isOpen && filteredOptions.length > 0 && (
         <div className="absolute left-0 right-0 top-7 z-20 max-h-52 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
-          <div role="listbox" aria-label="Tailwind background colors" className="space-y-1">
+          <div
+            id={listboxId}
+            role="listbox"
+            aria-label="Tailwind background colors"
+            className="space-y-1"
+          >
             {filteredOptions.map((option, index) => (
               <button
                 key={option.token}
@@ -1619,12 +1622,12 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   useEffect(() => {
     if (!isBackgroundPickerOpen) return
     setBackgroundPickerDraft(buildBackgroundPickerDraft(backgroundPickerBaseColor))
-  }, [isBackgroundPickerOpen])
+  }, [backgroundPickerBaseColor, isBackgroundPickerOpen])
 
   useEffect(() => {
     if (!isBorderPickerOpen) return
     setBorderPickerDraft(buildBackgroundPickerDraft(borderPickerBaseColor))
-  }, [isBorderPickerOpen])
+  }, [borderPickerBaseColor, isBorderPickerOpen])
 
   useEffect(() => {
     if (!isBackgroundPickerOpen) return
@@ -2249,8 +2252,9 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   }
 
   return (
-    <aside className="fixed right-0 top-0 h-screen w-96 overflow-y-auto border-l border-zinc-200 bg-white px-3 py-5 shadow-lg">
-      <div className="space-y-5">
+    <aside className="fixed right-0 top-0 flex h-screen w-96 flex-col border-l border-zinc-200 bg-white shadow-lg">
+      <div className="flex-1 overflow-y-auto px-3 py-5">
+        <div className="space-y-5">
         <section className="space-y-4 border-b border-zinc-200 pb-5">
           <div className="pt-3">
             <p className="text-[18px] font-semibold tracking-[-0.02em] text-zinc-400">
@@ -3034,7 +3038,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                           side="top"
                           value={borderWidthState.topExplicit}
                           placeholder={borderWidthState.effectiveTop || centerBorderWeightPlaceholder || '1px'}
-                          isActive={Boolean(borderWidthState.topExplicit)}
                           onChange={(value) => updateBorderWidth('top', value)}
                           onActivate={() => activateSideBorderWidth('top')}
                           onRemove={() => updateBorderWidth('top', '')}
@@ -3046,7 +3049,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                           side="left"
                           value={borderWidthState.leftExplicit}
                           placeholder={borderWidthState.effectiveLeft || centerBorderWeightPlaceholder || '1px'}
-                          isActive={Boolean(borderWidthState.leftExplicit)}
                           onChange={(value) => updateBorderWidth('left', value)}
                           onActivate={() => activateSideBorderWidth('left')}
                           onRemove={() => updateBorderWidth('left', '')}
@@ -3075,7 +3077,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                           side="right"
                           value={borderWidthState.rightExplicit}
                           placeholder={borderWidthState.effectiveRight || centerBorderWeightPlaceholder || '1px'}
-                          isActive={Boolean(borderWidthState.rightExplicit)}
                           onChange={(value) => updateBorderWidth('right', value)}
                           onActivate={() => activateSideBorderWidth('right')}
                           onRemove={() => updateBorderWidth('right', '')}
@@ -3087,7 +3088,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                           side="bottom"
                           value={borderWidthState.bottomExplicit}
                           placeholder={borderWidthState.effectiveBottom || centerBorderWeightPlaceholder || '1px'}
-                          isActive={Boolean(borderWidthState.bottomExplicit)}
                           onChange={(value) => updateBorderWidth('bottom', value)}
                           onActivate={() => activateSideBorderWidth('bottom')}
                           onRemove={() => updateBorderWidth('bottom', '')}
@@ -3111,19 +3111,23 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   placeholder={group.placeholder}
                 />
               ))}
-
-              <button
-                onClick={handleSave}
-                disabled={isSaving || isLoading || !selectedComponent}
-                className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
-              >
-                {isSaving ? 'Saving...' : 'Save changes'}
-              </button>
-
-              {saveMessage && <p className="text-center text-xs font-medium text-zinc-500">{saveMessage}</p>}
             </section>
           </>
         )}
+
+        </div>
+      </div>
+
+      <div className="border-t border-zinc-200 bg-white/95 px-3 pb-5 pt-4 backdrop-blur">
+        <button
+          onClick={handleSave}
+          disabled={isSaving || isLoading || !selectedComponent}
+          className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
+        >
+          {isSaving ? 'Saving...' : 'Save changes'}
+        </button>
+
+        {saveMessage && <p className="mt-2 text-center text-xs font-medium text-zinc-500">{saveMessage}</p>}
       </div>
     </aside>
   )

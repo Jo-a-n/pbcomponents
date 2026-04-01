@@ -117,8 +117,14 @@ export async function POST(request: NextRequest) {
     )
 
     const updatedStyles = { ...currentStyles, ...normalizedIncomingStyles }
+    const currentSerializedStyles = JSON.stringify(currentStyles, null, 2)
+    const updatedSerializedStyles = JSON.stringify(updatedStyles, null, 2)
 
-    await writeFile(filePath, JSON.stringify(updatedStyles, null, 2), 'utf-8')
+    if (currentSerializedStyles === updatedSerializedStyles) {
+      return NextResponse.json({ success: true, message: 'Styles unchanged', fileName })
+    }
+
+    await writeFile(filePath, updatedSerializedStyles, 'utf-8')
 
     return NextResponse.json({ success: true, message: 'Styles saved successfully', fileName })
   } catch (error) {
