@@ -91,7 +91,7 @@ export function LibraryWorkspace({ components, children }: LibraryWorkspaceProps
       />
 
       <main className="ml-64 mr-96 flex-1 px-8 py-10 md:px-12">
-        <div className="mx-auto mb-8 flex max-w-5xl items-center gap-3">
+        <div className="mx-auto mb-8 flex max-w-5xl items-center gap-3 justify-between">
           <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
             Component Library
           </h1>
