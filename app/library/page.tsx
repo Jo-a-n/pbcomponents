@@ -1,81 +1,21 @@
 import * as React from 'react'
-import { readdir, readFile } from 'node:fs/promises'
-import path from 'node:path'
 
-import { LibraryWorkspace } from './LibraryWorkspace'
-
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
+import { componentHierarchy } from '@/lib/component-selection/componentHierarchy.generated'
+import { LibraryWorkspace } from '@/pb.workspace/LibraryWorkspace'
 
 type ComponentModule = Record<string, React.ComponentType<{ children?: React.ReactNode; className?: string }>>
 type ViewModule = Record<string, React.ComponentType>
 
-type ComponentGroup = {
-  fileName: string
-  name: string
-  children: string[]
-}
-
-function toPascalCase(value: string) {
-  return value
-    .split(/[-_]/g)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join('')
-}
-
-function parseExportNames(source: string) {
-  const match = source.match(/export\s*\{([\s\S]*?)\}/m)
-  if (!match) return []
-
-  return match[1]
-    .split(',')
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const [left] = entry.split(/\s+as\s+/)
-      return left?.trim() ?? ''
-    })
-    .filter(Boolean)
-}
-
-async function getComponentGroups() {
-  const componentsDir = path.join(process.cwd(), 'components')
-  const entries = await readdir(componentsDir, { withFileTypes: true })
-  const files = entries
-    .filter(
-      (entry) =>
-        entry.isFile() &&
-        entry.name.endsWith('.tsx') &&
-        !entry.name.endsWith('.view.tsx')
-    )
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b))
-
-  const groups: ComponentGroup[] = []
-
-  for (const fileName of files) {
-    const filePath = path.join(componentsDir, fileName)
-    const source = await readFile(filePath, 'utf8')
-    const exports = parseExportNames(source)
-    const parentName = toPascalCase(fileName.replace(/\.tsx$/, ''))
-
-    if (!exports.includes(parentName)) {
-      continue
-    }
-
-    const children = exports.filter(
-      (name) => name !== parentName && name.startsWith(parentName)
-    )
-
-    groups.push({
-      fileName: fileName.replace(/\.tsx$/, ''),
-      name: parentName,
-      children,
-    })
+function componentNameToFileName(componentName: string) {
+  const generatedMatch = componentName.match(/^Div(\d{3})$/)
+  if (generatedMatch) {
+    return `div-${generatedMatch[1]}`
   }
 
-  return groups
+  return componentName
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase()
 }
 
 async function loadComponentModule(fileName: string) {
@@ -108,14 +48,13 @@ function renderComponentGroup(groupName: string, childrenNames: string[], compon
 }
 
 export default async function LibraryPage() {
-  const componentGroups = await getComponentGroups()
-  const componentHierarchy = componentGroups.map(({ name, children }) => ({ name, children }))
   const groups = await Promise.all(
-    componentGroups.map(async (group) => {
+    componentHierarchy.map(async (group) => {
+      const fileName = componentNameToFileName(group.name)
       let preview: React.ReactNode = null
 
       try {
-        const viewModule = await loadViewModule(group.fileName)
+        const viewModule = await loadViewModule(fileName)
         const View = viewModule[`${group.name}View`]
         if (isComponent(View)) {
           preview = <View />
@@ -125,7 +64,7 @@ export default async function LibraryPage() {
       }
 
       if (!preview) {
-        const componentModule = await loadComponentModule(group.fileName)
+        const componentModule = await loadComponentModule(fileName)
         preview = renderComponentGroup(group.name, group.children, componentModule)
       }
 
@@ -135,9 +74,6 @@ export default async function LibraryPage() {
 
   return (
     <LibraryWorkspace components={componentHierarchy}>
-      <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-        Component Library
-      </h1>
       <div className="space-y-8">
         {groups.map(({ group, preview }) => (
           <section
