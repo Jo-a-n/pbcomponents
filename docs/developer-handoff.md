@@ -1,5 +1,48 @@
 # Developer Handoff Log
 
+## 2026-04-07
+
+### Summary
+- Reduced workspace memory pressure by switching the library page to the generated component hierarchy instead of scanning `components/` at runtime, and added VS Code watcher/search excludes for heavy folders.
+- Added a manual `renew-library` API flow and wired the library workspace UI to refresh the generated hierarchy after create/delete actions or an explicit renew.
+- Moved workspace-only routes, scripts, and UI into `(pb.workspace)` / `pb.workspace/` so the workspace surface is separated more clearly from reusable component code.
+- Completed the Style Editor border tool logic, including shared/side border width handling, border color parsing, inherited text-color fallback, and preview updates that reflect the active border color.
+- Extracted Style Editor and save-styles normalization logic into shared helpers under `lib/style-editor/` and added Node test coverage for class token parsing, background/border helpers, editor state helpers, and save normalization.
+
+### Commits (chronological)
+1. `b7d081a` Optimizations for memory usage: Component scan, route changes and vscode settings
+2. `2970b12` Directory changes & Style Editor Features: Seperate comp library layout to pb.workspace/ & complete Border tool logic
+3. `8968e09` organize directory w/ pb.component distiction
+4. `bdc872d` test: cover style editor helper logic and save-styles normalization
+
+### Key Files Touched Today
+- `.vscode/settings.json`
+- `app/(pb.workspace)/library/page.tsx`
+- `app/api/(pb.workspace)/create-component/route.ts`
+- `app/api/(pb.workspace)/delete-component/route.ts`
+- `app/api/(pb.workspace)/renew-library/route.ts`
+- `app/api/(pb.workspace)/save-styles/route.ts`
+- `pb.workspace/LibraryWorkspace.tsx`
+- `pb.workspace/ComponentTree.tsx`
+- `pb.workspace/StyleEditor.tsx`
+- `pb.workspace/componentNameToFileName.ts`
+- `lib/style-editor/save-styles.mjs`
+- `lib/style-editor/style-editor-helpers.mjs`
+- `app/tests/background-color.test.mjs`
+- `app/tests/class-tokens.test.mjs`
+- `app/tests/save-styles.test.mjs`
+- `app/tests/style-editor-borders.test.mjs`
+- `app/tests/style-editor-helpers.test.mjs`
+- `scripts/pb.workspace/generate-component-hierarchy.mjs`
+- `package.json`
+
+### Notes For The Next Developer
+- The `/library` page now reads from `componentHierarchy.generated.ts` and uses `componentNameToFileName()` instead of scanning component source files on each request. If the hierarchy looks stale after manual file changes, use the new renew flow or rerun `npm run generate:hierarchy`.
+- Workspace-specific pages and APIs now live under `app/(pb.workspace)/...`, and the workspace-only React files/helpers moved into `pb.workspace/`. Any imports still pointing at the old `components/panels/*` or `app/library/*` paths should be treated as stale.
+- The library workspace now exposes create, delete, and renew actions from the UI. The API routes regenerate the hierarchy script from `scripts/pb.workspace/generate-component-hierarchy.mjs` after mutations.
+- `pb.workspace/StyleEditor.tsx` was slimmed down by moving pure logic into `lib/style-editor/style-editor-helpers.mjs`; border behavior changes are mostly there now, while `save-styles` normalization lives in `lib/style-editor/save-styles.mjs`.
+- Test coverage was added through `npm test` (`node --test app/tests/*.test.mjs`) for the extracted helper logic and save path normalization. The save-styles route now shares normalization code with the editor instead of maintaining separate category regex logic.
+
 ## 2026-04-01
 
 ### Summary
