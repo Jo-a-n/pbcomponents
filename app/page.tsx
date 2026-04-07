@@ -14,63 +14,14 @@ import {
   FrameTitle,
   FrameAction,
 } from "@/components/frame"
-import { StyleEditor } from '@/pb.workspace/StyleEditor'
-import { ComponentTree } from '@/pb.workspace/ComponentTree'
-import { componentHierarchy } from '@/lib/component-selection/componentHierarchy.generated'
-import { useComponentSelection } from '@/lib/component-selection/useComponentSelection'
+
 
 export default function Home() {
-  const {
-    selectedComponent,
-    setSelectedComponent,
-    canvasRef,
-    navigateDown,
-    handleCanvasClickCapture,
-    handleCanvasDoubleClickCapture,
-  } = useComponentSelection({ componentHierarchy })
-
-  const handleCreateComponent = async () => {
-    const response = await fetch('/api/create-component', { method: 'POST' })
-    const data = await response.json()
-
-    if (!response.ok) {
-      throw new Error(data?.error ?? 'Failed to create component')
-    }
-
-    // Refresh so the updated generated hierarchy is re-imported.
-    window.location.reload()
-    return data.componentName as string
-  }
-
-  const handleDeleteComponent = async (componentName: string) => {
-    const response = await fetch('/api/delete-component', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ componentName }),
-    })
-    const data = await response.json()
-
-    if (!response.ok) {
-      throw new Error(data?.error ?? 'Failed to delete component')
-    }
-
-    // Refresh so the updated generated hierarchy is re-imported.
-    window.location.reload()
-  }
 
   return (
-    <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <ComponentTree
-        selectedComponent={selectedComponent}
-        setSelectedComponent={setSelectedComponent}
-        navigateDown={navigateDown}
-        components={componentHierarchy}
-        onCreateComponent={handleCreateComponent}
-        onDeleteComponent={handleDeleteComponent}
-      />
+    <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
 
-      <main className="flex-1 flex items-center justify-center py-32 px-16 ml-64">
-        <div className="absolute top-6 right-[26rem]">
+        <div className="absolute top-6 right-16">
           <Link
             href="/library"
             className="inline-flex items-center rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 shadow-sm transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
@@ -78,22 +29,19 @@ export default function Home() {
             Open Library
           </Link>
         </div>
-        <div
-          ref={canvasRef}
-          className="w-full max-w-3xl grid gap-4"
-          onClickCapture={handleCanvasClickCapture}
-          onDoubleClickCapture={handleCanvasDoubleClickCapture}
-        >
+
+      <main className="flex flex-col justify-center gap-6 p-24 mx-32">
+
           <Card>
             <CardHeader>
               <CardTitle>
-                Card Title
+                This is the real title
               </CardTitle>
               <CardDescription>
-                Card Description
+                wowowow what an amazing description
               </CardDescription>
               <CardAction>
-                Card Action
+                Now Act!
               </CardAction>
             </CardHeader>
             <CardContent>
@@ -106,16 +54,15 @@ export default function Home() {
           
           <Frame>
             <FrameTitle>
-              Card Title Card TitleCard TitleCard TitleCard TitleCard TitleCard TitleCard TitleCard Title
+              This is a test component card, this is not the component, you know that because you are reading it right now.
             </FrameTitle>
             <FrameAction>
-              Card Action
+              That'a a Frame named "Frame Action"
             </FrameAction>
           </Frame>
-        </div>  
-        
+
       </main>
-      <StyleEditor selectedComponent={selectedComponent} components={componentHierarchy} />
+
     </div>
   );
 }
