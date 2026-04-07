@@ -14,8 +14,8 @@ import {
   FrameTitle,
   FrameAction,
 } from "@/components/frame"
-import { StyleEditor } from '@/components/panels/StyleEditor'
-import { ComponentTree } from '@/components/panels/ComponentTree'
+import { StyleEditor } from '@/pb.workspace/StyleEditor'
+import { ComponentTree } from '@/pb.workspace/ComponentTree'
 import { componentHierarchy } from '@/lib/component-selection/componentHierarchy.generated'
 import { useComponentSelection } from '@/lib/component-selection/useComponentSelection'
 

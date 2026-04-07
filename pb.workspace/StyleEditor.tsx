@@ -343,6 +343,43 @@ function parseBorderColorToken(token: string) {
   }
 }
 
+function parseTextColorToken(token: string) {
+  if (!token.startsWith('text-')) return null
+
+  const value = token.slice(5)
+  if (!value) return null
+
+  if (
+    /^(left|center|right|justify|start|end)$/.test(value) ||
+    /^(xs|sm|base|lg|xl|\d+xl)$/.test(value) ||
+    /^\[(length|size):.+\]$/.test(value)
+  ) {
+    return null
+  }
+
+  return decodeTailwindArbitraryValue(unwrapArbitraryValue(value))
+}
+
+function getInheritedCurrentColor(tokens: string[]) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const colorValue = parseTextColorToken(tokens[index])
+    if (!colorValue) continue
+
+    const resolvedValue = resolveTailwindColorValue(colorValue)
+    return {
+      label: colorValue,
+      previewColor: resolvedValue ?? 'currentColor',
+      source: 'Text color',
+    }
+  }
+
+  return {
+    label: 'var(--foreground)',
+    previewColor: 'var(--foreground)',
+    source: 'Body text color',
+  }
+}
+
 function buildBorderColorToken(colorValue: string, opacityValue: string) {
   const normalizedColorValue = normalizeBackgroundColorValue(colorValue)
   if (!normalizedColorValue) return ''
@@ -371,6 +408,11 @@ function formatBorderWidthValueForDisplay(value: string) {
   return normalizedValue
 }
 
+function isArbitraryBorderWidthValue(value: string) {
+  const normalizedValue = unwrapArbitraryValue(value).trim()
+  return /^-?\d*\.?\d+(px|rem|em)?$/.test(normalizedValue)
+}
+
 function parseBorderWidthToken(token: string) {
   if (token === 'border-none') {
     return { target: 'all' as const, value: 'none' }
@@ -381,7 +423,7 @@ function parseBorderWidthToken(token: string) {
   }
 
   const allMatch = token.match(/^border-(0|2|4|8|\[.+\])$/)
-  if (allMatch) {
+  if (allMatch && (allMatch[1][0] !== '[' || isArbitraryBorderWidthValue(allMatch[1]))) {
     return { target: 'all' as const, value: formatBorderWidthValueForInput(allMatch[1]) }
   }
 
@@ -394,7 +436,10 @@ function parseBorderWidthToken(token: string) {
   }
 
   const sideValueMatch = token.match(/^border-([trblxy])-(0|2|4|8|\[.+\])$/)
-  if (sideValueMatch) {
+  if (
+    sideValueMatch &&
+    (sideValueMatch[2][0] !== '[' || isArbitraryBorderWidthValue(sideValueMatch[2]))
+  ) {
     return {
       target: borderWidthShorthandToTarget(sideValueMatch[1]),
       value: formatBorderWidthValueForInput(sideValueMatch[2]),
@@ -883,13 +928,13 @@ function BorderWeightField({
           event.currentTarget.select()
         }}
         className={[
-          'bg-transparent text-[14px] font-semibold leading-[140%] text-black outline-none placeholder:text-black/20',
+          'bg-transparent text-[16px] font-semibold leading-[140%] text-black outline-none placeholder:text-black/20',
           'opacity-100',
           isVertical
-            ? 'h-[13px] w-full text-center'
+            ? 'h-[18px] w-full text-center'
             : hasExplicitValue
-              ? 'h-[13px] w-full text-center'
-              : 'h-[13px] min-w-0 flex-1 text-center',
+              ? 'h-[18px] w-full text-center'
+              : 'h-[18px] min-w-0 flex-1 text-center',
         ].join(' ')}
         placeholder={displayPlaceholder}
         aria-label={`${side} border width`}
@@ -1466,6 +1511,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const borderPickerBaseColor = borderPreviewColor ?? '#d4d4d8'
   const hasBorderColor = Boolean(borderDetails.colorValue)
   const borderWidthState = getBorderWidthState(classTokens)
+  const inheritedBorderColor = getInheritedCurrentColor(classTokens)
   const hasBorderNone = classTokens.includes('border-none')
   const centerBorderWeightValue =
     !borderWidthState.hasSideOverrides && borderWidthState.allValue !== 'none'
@@ -1475,8 +1521,8 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const centerBorderWeightPlaceholder = hasBorderNone
     ? 'none'
     : borderWidthState.hasSideOverrides
-      ? ''
-      : formatBorderWidthValueForDisplay(borderWidthState.allValue || '')
+      ? '0'
+      : formatBorderWidthValueForDisplay(borderWidthState.allValue || '0px')
   const borderWeightPreviewStyle = borderWidthState.hasSideOverrides
     ? {
         borderTopWidth: borderWidthValueToPreviewCss(borderWidthState.topExplicit),
@@ -1863,11 +1909,13 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   }
 
   const handleAddBorderColor = () => {
+    if (borderDetails.colorValue) return
+
     const nextTokens = [...classTokens]
     const withoutBorderColor = replaceTokens(
       nextTokens,
       /^border-(?![trblxy]$)(?!0$)(?!2$)(?!4$)(?!8$)(?!solid$)(?!dashed$)(?!none$).+/,
-      borderDetails.colorValue ? [] : ['border-neutral-800']
+      ['border-neutral-800']
     )
     const withoutBorderNone = withoutBorderColor.filter((token) => token !== 'border-none')
     const nextBorderState = getBorderWidthState(withoutBorderNone)
@@ -2252,9 +2300,8 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   }
 
   return (
-    <aside className="fixed right-0 top-0 flex h-screen w-96 flex-col border-l border-zinc-200 bg-white shadow-lg">
-      <div className="flex-1 overflow-y-auto px-3 py-5">
-        <div className="space-y-5">
+    <aside className="fixed right-0 top-0 h-screen w-96 overflow-y-auto border-l border-zinc-200 bg-white px-3 py-5 shadow-lg">
+      <div className="space-y-5 pb-28">
         <section className="space-y-4 border-b border-zinc-200 pb-5">
           <div className="pt-3">
             <p className="text-[18px] font-semibold tracking-[-0.02em] text-zinc-400">
@@ -2373,24 +2420,10 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
             </section>
 
             <section className="space-y-5 border-b border-zinc-200 pb-5">
-              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Limits</p>
-
-              <div className="flex items-center gap-3">
-                <span className={`flex-1 ${tinyLabelClass()}`}>Clip content to limits</span>
-                <button
-                  type="button"
-                  onClick={handleClipContentToggle}
-                  className={switchTrackClass(clipsContent)}
-                  aria-pressed={clipsContent}
-                  aria-label="Clip content to radius"
-                >
-                  <span className={switchThumbClass(clipsContent)} />
-                </button>
-              </div>
-
+              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Padding</p>
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3">
-                  <span className={tinyLabelClass()}>Padding</span>
+                  <span className={tinyLabelClass()}>Mode</span>
                   <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
                     {(['axes', 'sides'] as const).map((mode) => (
                       <button
@@ -2465,200 +2498,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   )}
                 </div>
               </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center justify-between gap-3">
-                  <span className={tinyLabelClass()}>Corner radius</span>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
-                    {(['linked', 'independent'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => handleCornerRadiusModeChange(mode)}
-                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
-                          cornerRadiusMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
-                        }`}
-                      >
-                        {mode === 'linked' ? 'Linked' : 'Independent'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className={cornerRadiusMode === 'linked' ? 'grid grid-cols-2 gap-x-3 gap-y-1' : 'grid grid-cols-2 gap-x-3 gap-y-1'}>
-                  {cornerRadiusMode === 'linked' ? (
-                    <PaddingField
-                      value={radiusLinkedDisplayValue}
-                      onChange={handleCornerRadiusLinkedChange}
-                      selectOnFocus={linkedShowsVarious}
-                      hasValue={Boolean(radiusLinkedDisplayValue)}
-                      placeholder="none"
-                      ariaLabel="Corner radius all"
-                      markers={[]}
-                    />
-                  ) : (
-                    <>
-                      <PaddingField
-                        value={radiusTopLeftValue}
-                        onChange={(value) => handleCornerRadiusValueChange('tl', value)}
-                        hasValue={Boolean(radiusTopLeftValue)}
-                        cornerCue="tl"
-                        placeholder="none"
-                        ariaLabel="Corner radius top left"
-                        markers={[]}
-                      />
-                      <PaddingField
-                        value={radiusTopRightValue}
-                        onChange={(value) => handleCornerRadiusValueChange('tr', value)}
-                        hasValue={Boolean(radiusTopRightValue)}
-                        muted={independentGhostedCorners.tr}
-                        cornerCue="tr"
-                        placeholder="none"
-                        ariaLabel="Corner radius top right"
-                        markers={[]}
-                      />
-                      <PaddingField
-                        value={radiusBottomLeftValue}
-                        onChange={(value) => handleCornerRadiusValueChange('bl', value)}
-                        hasValue={Boolean(radiusBottomLeftValue)}
-                        muted={independentGhostedCorners.bl}
-                        cornerCue="bl"
-                        placeholder="none"
-                        ariaLabel="Corner radius bottom left"
-                        markers={[]}
-                      />
-                      <PaddingField
-                        value={radiusBottomRightValue}
-                        onChange={(value) => handleCornerRadiusValueChange('br', value)}
-                        hasValue={Boolean(radiusBottomRightValue)}
-                        muted={independentGhostedCorners.br}
-                        cornerCue="br"
-                        placeholder="none"
-                        ariaLabel="Corner radius bottom right"
-                        markers={[]}
-                      />
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className={`${tinyLabelClass()}`}>Dimension Restrictions</div>
-                <div className="space-y-2">
-                  <div className="relative flex items-center gap-2">
-                    <span className={`flex-1 ${tinyLabelClass()}`}>Width (Max/Min)</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveLimitMenu((prev) => (prev === 'width' ? null : 'width'))
-                      }
-                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
-                      aria-label="Add width limit"
-                      title="Add width limit"
-                    >
-                      +
-                    </button>
-                    {activeLimitMenu === 'width' && (
-                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
-                        {(['min', 'max'] as const).map((kind) => (
-                          <button
-                            key={kind}
-                            type="button"
-                            onClick={() => showLimitField('width', kind)}
-                            disabled={visibleLimitFields[limitFieldKey('width', kind)]}
-                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
-                          >
-                            Add {kind}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {visibleLimitFields['width-min'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.width.min.label}
-                      value={limitFieldConfig.width.min.value}
-                      onChange={(value) => handleLimitValueChange('width', 'min', value)}
-                      onClear={() => hideLimitField('width', 'min')}
-                      placeholder={limitFieldConfig.width.min.placeholder}
-                      ariaLabel={limitFieldConfig.width.min.ariaLabel}
-                    />
-                  )}
-
-                  {visibleLimitFields['width-max'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.width.max.label}
-                      value={limitFieldConfig.width.max.value}
-                      onChange={(value) => handleLimitValueChange('width', 'max', value)}
-                      onClear={() => hideLimitField('width', 'max')}
-                      placeholder={limitFieldConfig.width.max.placeholder}
-                      ariaLabel={limitFieldConfig.width.max.ariaLabel}
-                    />
-                  )}
-
-                  {hasWidthLimitConflict && (
-                    <p className="text-[10px] font-medium leading-tight text-red-500">
-                      Min width is larger than max width.
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <div className="relative flex items-center gap-2">
-                    <span className={`flex-1 ${tinyLabelClass()}`}>Height (Max/Min)</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveLimitMenu((prev) => (prev === 'height' ? null : 'height'))
-                      }
-                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
-                      aria-label="Add height limit"
-                      title="Add height limit"
-                    >
-                      +
-                    </button>
-                    {activeLimitMenu === 'height' && (
-                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
-                        {(['min', 'max'] as const).map((kind) => (
-                          <button
-                            key={kind}
-                            type="button"
-                            onClick={() => showLimitField('height', kind)}
-                            disabled={visibleLimitFields[limitFieldKey('height', kind)]}
-                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
-                          >
-                            Add {kind}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {visibleLimitFields['height-min'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.height.min.label}
-                      value={limitFieldConfig.height.min.value}
-                      onChange={(value) => handleLimitValueChange('height', 'min', value)}
-                      onClear={() => hideLimitField('height', 'min')}
-                      placeholder={limitFieldConfig.height.min.placeholder}
-                      ariaLabel={limitFieldConfig.height.min.ariaLabel}
-                    />
-                  )}
-
-                  {visibleLimitFields['height-max'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.height.max.label}
-                      value={limitFieldConfig.height.max.value}
-                      onChange={(value) => handleLimitValueChange('height', 'max', value)}
-                      onClear={() => hideLimitField('height', 'max')}
-                      placeholder={limitFieldConfig.height.max.placeholder}
-                      ariaLabel={limitFieldConfig.height.max.ariaLabel}
-                    />
-                  )}
-                </div>
-              </div>
-
             </section>
 
             <section className="space-y-4 border-b border-zinc-200 pb-5">
@@ -2843,7 +2682,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               )}
             </section>
 
-            <section className="space-y-4">
+            <section className="space-y-5 border-b border-zinc-200 pb-5">
               <div className="flex items-center gap-2 pt-1">
                 <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">Border</p>
                 <button
@@ -2857,176 +2696,193 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                 </button>
               </div>
 
-              {hasBorderColor && (
-                <div className="flex gap-1">
-                  <BackgroundColorCombobox
-                    value={borderDetails.colorValue}
-                    onChange={handleBorderColorChange}
-                  />
-                <input
-                  value={`${borderDetails.opacityValue}%`}
-                  onChange={(event) => handleBorderOpacityChange(event.target.value)}
-                  className="h-6 w-11 rounded-lg bg-gray-100 px-2 text-[10px] font-medium text-black/70 outline-none"
-                  placeholder="100%"
-                  aria-label="Border opacity"
-                />
-                <div className="relative" ref={borderPickerRef}>
-                  <button
-                    type="button"
-                    onClick={() => setIsBorderPickerOpen((prev) => !prev)}
-                      className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
-                      aria-label="Open border color picker"
-                      title="Open border color picker"
-                    >
-                      <div
-                        className="w-full"
-                        style={{
-                          backgroundColor: borderPreviewColor ?? 'transparent',
-                          opacity: Number.isNaN(borderPreviewOpacity)
-                            ? 1
-                            : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
-                        }}
-                      />
-                    </button>
-                    {isBorderPickerOpen && (
-                      <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
-                        <div className="space-y-3">
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="color"
-                                value={borderPickerDraft.hex}
-                                onChange={(event) => {
-                                  const nextValue = event.target.value
-                                  setBorderPickerDraft(buildBackgroundPickerDraft(nextValue))
-                                  applyBorderPickerColor(nextValue)
-                                }}
-                                className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
-                                aria-label="Pick border color"
-                              />
-                              <div
-                                className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
-                                aria-label="Border color preview"
-                                title="Border color preview"
-                                style={{
-                                  backgroundColor: '#f4f4f5',
-                                  backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
-                                  backgroundSize: '8px 8px',
-                                }}
-                              >
-                                <div
-                                  className="absolute inset-0"
-                                  style={{
-                                    backgroundColor: borderPreviewColor ?? 'transparent',
-                                    opacity: Number.isNaN(borderPreviewOpacity)
-                                      ? 1
-                                      : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+              <div className="space-y-1">
+                {hasBorderColor && (
+                  <div className="flex gap-1">
+                    <BackgroundColorCombobox
+                      value={borderDetails.colorValue}
+                      onChange={handleBorderColorChange}
+                    />
+                    <input
+                      value={`${borderDetails.opacityValue}%`}
+                      onChange={(event) => handleBorderOpacityChange(event.target.value)}
+                      className="h-6 w-11 rounded-lg bg-gray-100 px-2 text-[10px] font-medium text-black/70 outline-none"
+                      placeholder="100%"
+                      aria-label="Border opacity"
+                    />
+                    <div className="relative" ref={borderPickerRef}>
+                      <button
+                        type="button"
+                        onClick={() => setIsBorderPickerOpen((prev) => !prev)}
+                        className="flex h-6 w-[30px] items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white"
+                        aria-label="Open border color picker"
+                        title="Open border color picker"
+                      >
+                        <div
+                          className="w-full"
+                          style={{
+                            backgroundColor: borderPreviewColor ?? 'transparent',
+                            opacity: Number.isNaN(borderPreviewOpacity)
+                              ? 1
+                              : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+                          }}
+                        />
+                      </button>
+                      {isBorderPickerOpen && (
+                        <div className="absolute right-0 top-8 z-20 w-56 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                          <div className="space-y-3">
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="color"
+                                  value={borderPickerDraft.hex}
+                                  onChange={(event) => {
+                                    const nextValue = event.target.value
+                                    setBorderPickerDraft(buildBackgroundPickerDraft(nextValue))
+                                    applyBorderPickerColor(nextValue)
                                   }}
+                                  className="h-10 flex-1 cursor-pointer rounded-xl border border-zinc-200 bg-white p-1"
+                                  aria-label="Pick border color"
                                 />
+                                <div
+                                  className="relative h-10 w-10 overflow-hidden rounded-xl border border-zinc-200"
+                                  aria-label="Border color preview"
+                                  title="Border color preview"
+                                  style={{
+                                    backgroundColor: '#f4f4f5',
+                                    backgroundImage: 'repeating-conic-gradient(#d4d4d8 0% 25%, #f4f4f5 0% 50%)',
+                                    backgroundSize: '8px 8px',
+                                  }}
+                                >
+                                  <div
+                                    className="absolute inset-0"
+                                    style={{
+                                      backgroundColor: borderPreviewColor ?? 'transparent',
+                                      opacity: Number.isNaN(borderPreviewOpacity)
+                                        ? 1
+                                        : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100,
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
+                                {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
+                                  <button
+                                    key={mode}
+                                    type="button"
+                                    onClick={() => setBorderPickerMode(mode)}
+                                    className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
+                                      borderPickerMode === mode
+                                        ? 'bg-white text-black shadow-sm'
+                                        : 'text-zinc-500'
+                                    }`}
+                                  >
+                                    {mode}
+                                  </button>
+                                ))}
                               </div>
                             </div>
-                            <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1">
-                              {(['hex', 'rgb', 'hsl'] as const).map((mode) => (
-                                <button
-                                  key={mode}
-                                  type="button"
-                                  onClick={() => setBorderPickerMode(mode)}
-                                  className={`rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition ${
-                                    borderPickerMode === mode
-                                      ? 'bg-white text-black shadow-sm'
-                                      : 'text-zinc-500'
-                                  }`}
-                                >
-                                  {mode}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
 
-                          <BackgroundColorMap
-                            mode={borderPickerMode}
-                            draft={borderPickerDraft}
-                            onRgbChange={handleBorderPickerRgbChange}
-                            onHslChange={handleBorderPickerHslChange}
-                          />
-                          {borderPickerMode === 'hsl' && (
-                            <div className="grid grid-cols-3 gap-2">
-                              <ColorChannelField
-                                label="H"
-                                value={borderPickerDraft.hue}
-                                onChange={(value) => handleBorderPickerHslChange('hue', value)}
-                              />
-                              <ColorChannelField
-                                label="S"
-                                value={borderPickerDraft.saturation}
-                                onChange={(value) =>
-                                  handleBorderPickerHslChange('saturation', value)
-                                }
-                              />
-                              <ColorChannelField
-                                label="L"
-                                value={borderPickerDraft.lightness}
-                                onChange={(value) =>
-                                  handleBorderPickerHslChange('lightness', value)
-                                }
-                              />
-                            </div>
-                          )}
-
-                          <BackgroundOpacitySlider
-                            colorValue={borderDetails.colorValue}
-                            opacityValue={borderDetails.opacityValue}
-                            onChange={handleBorderOpacityChange}
-                          />
-
-                          {borderPickerMode === 'hex' && (
-                            <ColorChannelField
-                              label="Hex"
-                              value={borderPickerDraft.hex}
-                              onChange={handleBorderPickerHexChange}
+                            <BackgroundColorMap
+                              mode={borderPickerMode}
+                              draft={borderPickerDraft}
+                              onRgbChange={handleBorderPickerRgbChange}
+                              onHslChange={handleBorderPickerHslChange}
                             />
-                          )}
+                            {borderPickerMode === 'hsl' && (
+                              <div className="grid grid-cols-3 gap-2">
+                                <ColorChannelField
+                                  label="H"
+                                  value={borderPickerDraft.hue}
+                                  onChange={(value) => handleBorderPickerHslChange('hue', value)}
+                                />
+                                <ColorChannelField
+                                  label="S"
+                                  value={borderPickerDraft.saturation}
+                                  onChange={(value) =>
+                                    handleBorderPickerHslChange('saturation', value)
+                                  }
+                                />
+                                <ColorChannelField
+                                  label="L"
+                                  value={borderPickerDraft.lightness}
+                                  onChange={(value) =>
+                                    handleBorderPickerHslChange('lightness', value)
+                                  }
+                                />
+                              </div>
+                            )}
 
-                          {borderPickerMode === 'rgb' && (
-                            <div className="grid grid-cols-3 gap-2">
+                            <BackgroundOpacitySlider
+                              colorValue={borderDetails.colorValue}
+                              opacityValue={borderDetails.opacityValue}
+                              onChange={handleBorderOpacityChange}
+                            />
+
+                            {borderPickerMode === 'hex' && (
                               <ColorChannelField
-                                label="R"
-                                value={borderPickerDraft.red}
-                                onChange={(value) => handleBorderPickerRgbChange('red', value)}
+                                label="Hex"
+                                value={borderPickerDraft.hex}
+                                onChange={handleBorderPickerHexChange}
                               />
-                              <ColorChannelField
-                                label="G"
-                                value={borderPickerDraft.green}
-                                onChange={(value) => handleBorderPickerRgbChange('green', value)}
-                              />
-                              <ColorChannelField
-                                label="B"
-                                value={borderPickerDraft.blue}
-                                onChange={(value) => handleBorderPickerRgbChange('blue', value)}
-                              />
-                            </div>
-                          )}
+                            )}
+
+                            {borderPickerMode === 'rgb' && (
+                              <div className="grid grid-cols-3 gap-2">
+                                <ColorChannelField
+                                  label="R"
+                                  value={borderPickerDraft.red}
+                                  onChange={(value) => handleBorderPickerRgbChange('red', value)}
+                                />
+                                <ColorChannelField
+                                  label="G"
+                                  value={borderPickerDraft.green}
+                                  onChange={(value) => handleBorderPickerRgbChange('green', value)}
+                                />
+                                <ColorChannelField
+                                  label="B"
+                                  value={borderPickerDraft.blue}
+                                  onChange={(value) => handleBorderPickerRgbChange('blue', value)}
+                                />
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRemoveBorderColor}
+                      disabled={!hasBorderColor}
+                      className="ml-1 flex h-6 w-6 items-center justify-center rounded-lg bg-gray-100 text-xs font-semibold text-zinc-500 transition hover:text-black disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-zinc-500"
+                      aria-label="Remove border color"
+                      title="Remove border color"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleRemoveBorderColor}
-                    className="ml-1 flex h-6 w-6 items-center justify-center rounded-lg bg-gray-100 text-xs font-semibold text-zinc-500 transition hover:text-black"
-                    aria-label="Remove border color"
-                    title="Remove border color"
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
+                )}
 
-              {hasBorderColor && (
-                <div className="space-y-1">
+                <div
+                  className={`flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-1.5 text-[10px] font-medium text-black/70 ${
+                    hasBorderColor ? 'opacity-40' : ''
+                  }`}
+                >
+                  <span
+                    className="h-3.5 w-3.5 shrink-0 rounded-full border border-black/10"
+                    style={{ backgroundColor: inheritedBorderColor.previewColor }}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate">
+                    {inheritedBorderColor.source}: {inheritedBorderColor.label}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1">
                   <span className={tinyLabelClass()}>Border-weight</span>
                   <div className="px-1 py-2">
-                    <div className="relative grid grid-cols-[50px_1fr_50px] grid-rows-[46px_30px_46px] gap-x-[6px] gap-y-1 px-[10px] py-[8px]">
+                    <div className="relative grid grid-cols-[50px_1fr_50px] grid-rows-[51px_30px_51px] gap-x-[6px] gap-y-1 px-[10px] py-[8px]">
                       <span
                         aria-hidden="true"
                         className="pointer-events-none absolute inset-0 rounded-[4px]"
@@ -3037,7 +2893,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                         <BorderWeightField
                           side="top"
                           value={borderWidthState.topExplicit}
-                          placeholder={borderWidthState.effectiveTop || centerBorderWeightPlaceholder || '1px'}
+                          placeholder={borderWidthState.effectiveTop || centerBorderWeightPlaceholder || '0px'}
                           onChange={(value) => updateBorderWidth('top', value)}
                           onActivate={() => activateSideBorderWidth('top')}
                           onRemove={() => updateBorderWidth('top', '')}
@@ -3048,7 +2904,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                         <BorderWeightField
                           side="left"
                           value={borderWidthState.leftExplicit}
-                          placeholder={borderWidthState.effectiveLeft || centerBorderWeightPlaceholder || '1px'}
+                          placeholder={borderWidthState.effectiveLeft || centerBorderWeightPlaceholder || '0px'}
                           onChange={(value) => updateBorderWidth('left', value)}
                           onActivate={() => activateSideBorderWidth('left')}
                           onRemove={() => updateBorderWidth('left', '')}
@@ -3066,7 +2922,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                           onFocus={(event) => {
                             event.currentTarget.select()
                           }}
-                          className="h-[18px] w-full bg-transparent text-center text-[14px] font-medium leading-[140%] text-black outline-none placeholder:text-black/40"
+                          className="h-[20px] w-full bg-transparent text-center text-[16px] font-medium leading-[140%] text-black outline-none placeholder:text-black/40"
                           placeholder={centerBorderWeightPlaceholder}
                           aria-label="Border width for all sides"
                         />
@@ -3076,7 +2932,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                         <BorderWeightField
                           side="right"
                           value={borderWidthState.rightExplicit}
-                          placeholder={borderWidthState.effectiveRight || centerBorderWeightPlaceholder || '1px'}
+                          placeholder={borderWidthState.effectiveRight || centerBorderWeightPlaceholder || '0px'}
                           onChange={(value) => updateBorderWidth('right', value)}
                           onActivate={() => activateSideBorderWidth('right')}
                           onRemove={() => updateBorderWidth('right', '')}
@@ -3087,7 +2943,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                         <BorderWeightField
                           side="bottom"
                           value={borderWidthState.bottomExplicit}
-                          placeholder={borderWidthState.effectiveBottom || centerBorderWeightPlaceholder || '1px'}
+                          placeholder={borderWidthState.effectiveBottom || centerBorderWeightPlaceholder || '0px'}
                           onChange={(value) => updateBorderWidth('bottom', value)}
                           onActivate={() => activateSideBorderWidth('bottom')}
                           onRemove={() => updateBorderWidth('bottom', '')}
@@ -3096,7 +2952,215 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                     </div>
                   </div>
                 </div>
-              )}
+            </section>
+
+            <section className="space-y-5">
+              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Limits & Corners</p>
+              <div className="flex items-center gap-3">
+                <span className={`flex-1 ${tinyLabelClass()}`}>Clip content to limits</span>
+                <button
+                  type="button"
+                  onClick={handleClipContentToggle}
+                  className={switchTrackClass(clipsContent)}
+                  aria-pressed={clipsContent}
+                  aria-label="Clip content to radius"
+                >
+                  <span className={switchThumbClass(clipsContent)} />
+                </button>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-3">
+                  <span className={tinyLabelClass()}>Corner radius</span>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
+                    {(['linked', 'independent'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => handleCornerRadiusModeChange(mode)}
+                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
+                          cornerRadiusMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
+                        }`}
+                      >
+                        {mode === 'linked' ? 'Linked' : 'Independent'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                  {cornerRadiusMode === 'linked' ? (
+                    <PaddingField
+                      value={radiusLinkedDisplayValue}
+                      onChange={handleCornerRadiusLinkedChange}
+                      selectOnFocus={linkedShowsVarious}
+                      hasValue={Boolean(radiusLinkedDisplayValue)}
+                      placeholder="none"
+                      ariaLabel="Corner radius all"
+                      markers={[]}
+                    />
+                  ) : (
+                    <>
+                      <PaddingField
+                        value={radiusTopLeftValue}
+                        onChange={(value) => handleCornerRadiusValueChange('tl', value)}
+                        hasValue={Boolean(radiusTopLeftValue)}
+                        cornerCue="tl"
+                        placeholder="none"
+                        ariaLabel="Corner radius top left"
+                        markers={[]}
+                      />
+                      <PaddingField
+                        value={radiusTopRightValue}
+                        onChange={(value) => handleCornerRadiusValueChange('tr', value)}
+                        hasValue={Boolean(radiusTopRightValue)}
+                        muted={independentGhostedCorners.tr}
+                        cornerCue="tr"
+                        placeholder="none"
+                        ariaLabel="Corner radius top right"
+                        markers={[]}
+                      />
+                      <PaddingField
+                        value={radiusBottomLeftValue}
+                        onChange={(value) => handleCornerRadiusValueChange('bl', value)}
+                        hasValue={Boolean(radiusBottomLeftValue)}
+                        muted={independentGhostedCorners.bl}
+                        cornerCue="bl"
+                        placeholder="none"
+                        ariaLabel="Corner radius bottom left"
+                        markers={[]}
+                      />
+                      <PaddingField
+                        value={radiusBottomRightValue}
+                        onChange={(value) => handleCornerRadiusValueChange('br', value)}
+                        hasValue={Boolean(radiusBottomRightValue)}
+                        muted={independentGhostedCorners.br}
+                        cornerCue="br"
+                        placeholder="none"
+                        ariaLabel="Corner radius bottom right"
+                        markers={[]}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className={`${tinyLabelClass()}`}>Dimension Restrictions</div>
+                <div className="space-y-2">
+                  <div className="relative flex items-center gap-2">
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Width (Max/Min)</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveLimitMenu((prev) => (prev === 'width' ? null : 'width'))
+                      }
+                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
+                      aria-label="Add width limit"
+                      title="Add width limit"
+                    >
+                      +
+                    </button>
+                    {activeLimitMenu === 'width' && (
+                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
+                        {(['min', 'max'] as const).map((kind) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => showLimitField('width', kind)}
+                            disabled={visibleLimitFields[limitFieldKey('width', kind)]}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                          >
+                            Add {kind}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {visibleLimitFields['width-min'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.width.min.label}
+                      value={limitFieldConfig.width.min.value}
+                      onChange={(value) => handleLimitValueChange('width', 'min', value)}
+                      onClear={() => hideLimitField('width', 'min')}
+                      placeholder={limitFieldConfig.width.min.placeholder}
+                      ariaLabel={limitFieldConfig.width.min.ariaLabel}
+                    />
+                  )}
+
+                  {visibleLimitFields['width-max'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.width.max.label}
+                      value={limitFieldConfig.width.max.value}
+                      onChange={(value) => handleLimitValueChange('width', 'max', value)}
+                      onClear={() => hideLimitField('width', 'max')}
+                      placeholder={limitFieldConfig.width.max.placeholder}
+                      ariaLabel={limitFieldConfig.width.max.ariaLabel}
+                    />
+                  )}
+
+                  {hasWidthLimitConflict && (
+                    <p className="text-[10px] font-medium leading-tight text-red-500">
+                      Min width is larger than max width.
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="relative flex items-center gap-2">
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Height (Max/Min)</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveLimitMenu((prev) => (prev === 'height' ? null : 'height'))
+                      }
+                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
+                      aria-label="Add height limit"
+                      title="Add height limit"
+                    >
+                      +
+                    </button>
+                    {activeLimitMenu === 'height' && (
+                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
+                        {(['min', 'max'] as const).map((kind) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => showLimitField('height', kind)}
+                            disabled={visibleLimitFields[limitFieldKey('height', kind)]}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                          >
+                            Add {kind}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {visibleLimitFields['height-min'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.height.min.label}
+                      value={limitFieldConfig.height.min.value}
+                      onChange={(value) => handleLimitValueChange('height', 'min', value)}
+                      onClear={() => hideLimitField('height', 'min')}
+                      placeholder={limitFieldConfig.height.min.placeholder}
+                      ariaLabel={limitFieldConfig.height.min.ariaLabel}
+                    />
+                  )}
+
+                  {visibleLimitFields['height-max'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.height.max.label}
+                      value={limitFieldConfig.height.max.value}
+                      onChange={(value) => handleLimitValueChange('height', 'max', value)}
+                      onClear={() => hideLimitField('height', 'max')}
+                      placeholder={limitFieldConfig.height.max.placeholder}
+                      ariaLabel={limitFieldConfig.height.max.ariaLabel}
+                    />
+                  )}
+                </div>
+              </div>
             </section>
 
             <section className="space-y-2 border-t border-zinc-200 pt-5">
@@ -3115,19 +3179,17 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
           </>
         )}
 
+        <div className="sticky bottom-0 -mx-3 border-t border-zinc-200 bg-white/95 px-3 pb-5 pt-4 backdrop-blur">
+          <button
+            onClick={handleSave}
+            disabled={isSaving || isLoading || !selectedComponent}
+            className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
+          >
+            {isSaving ? 'Saving...' : 'Save changes'}
+          </button>
+
+          {saveMessage && <p className="mt-2 text-center text-xs font-medium text-zinc-500">{saveMessage}</p>}
         </div>
-      </div>
-
-      <div className="border-t border-zinc-200 bg-white/95 px-3 pb-5 pt-4 backdrop-blur">
-        <button
-          onClick={handleSave}
-          disabled={isSaving || isLoading || !selectedComponent}
-          className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
-        >
-          {isSaving ? 'Saving...' : 'Save changes'}
-        </button>
-
-        {saveMessage && <p className="mt-2 text-center text-xs font-medium text-zinc-500">{saveMessage}</p>}
       </div>
     </aside>
   )
