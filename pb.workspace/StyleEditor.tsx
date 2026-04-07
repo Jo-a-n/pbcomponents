@@ -108,6 +108,10 @@ function tinyLabelClass() {
   return '[font-family:var(--font-work-sans)] text-[11px] font-medium leading-[110%] text-black/70'
 }
 
+function tinyHintClass() {
+  return '[font-family:var(--font-work-sans)] text-[10px] leading-[120%] text-black/45'
+}
+
 function fieldShellClass() {
   return 'flex h-6 items-center gap-1 rounded-lg bg-gray-100 px-2 text-[12px] font-medium text-black'
 }
@@ -353,20 +357,25 @@ function BackgroundColorCombobox({
   const listboxId = useId()
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const [inputValue, setInputValue] = useState(value)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
 
   const filteredOptions = useMemo(() => {
-    const trimmedValue = value.trim().toLowerCase()
-    if (!shouldSuggestTailwindColors(value)) return []
+    const trimmedValue = inputValue.trim().toLowerCase()
+    if (!shouldSuggestTailwindColors(inputValue)) return []
     if (!trimmedValue) return TAILWIND_COLOR_OPTIONS.slice(0, 24)
 
     return TAILWIND_COLOR_OPTIONS.filter((option) => option.token.includes(trimmedValue)).slice(0, 24)
-  }, [value])
+  }, [inputValue])
   const hasPinnedOptions = filteredOptions.some((option) =>
     PINNED_BACKGROUND_COLOR_TOKENS.includes(
       option.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
     )
   )
+
+  useEffect(() => {
+    setInputValue(value)
+  }, [value])
 
   useEffect(() => {
     if (!isOpen) return
@@ -383,22 +392,41 @@ function BackgroundColorCombobox({
     }
   }, [isOpen])
 
+  const commitValue = (nextValue: string) => {
+    const trimmedValue = nextValue.trim()
+    if (!trimmedValue) {
+      setInputValue(value)
+      return
+    }
+
+    onChange(trimmedValue)
+  }
+
   return (
     <div className="relative flex-1" ref={wrapperRef}>
       <input
-        value={value}
+        value={inputValue}
         onChange={(event) => {
+          setInputValue(event.target.value)
           setHighlightedIndex(0)
-          onChange(event.target.value)
           setIsOpen(true)
         }}
         onFocus={() => {
           setHighlightedIndex(0)
           setIsOpen(true)
         }}
+        onBlur={() => {
+          commitValue(inputValue)
+        }}
         onKeyDown={(event) => {
           if (!filteredOptions.length) {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              commitValue(inputValue)
+              setIsOpen(false)
+            }
             if (event.key === 'Escape') {
+              setInputValue(value)
               setIsOpen(false)
             }
             return
@@ -422,13 +450,19 @@ function BackgroundColorCombobox({
             const highlightedOption = filteredOptions[highlightedIndex]
             if (highlightedOption) {
               event.preventDefault()
+              setInputValue(highlightedOption.token)
               onChange(highlightedOption.token)
+              setIsOpen(false)
+            } else {
+              event.preventDefault()
+              commitValue(inputValue)
               setIsOpen(false)
             }
             return
           }
 
           if (event.key === 'Escape') {
+            setInputValue(value)
             setIsOpen(false)
           }
         }}
@@ -456,6 +490,7 @@ function BackgroundColorCombobox({
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault()
+                  setInputValue(option.token)
                   onChange(option.token)
                   setIsOpen(false)
                 }}
@@ -1789,7 +1824,10 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               </div>
 
               <label className="block space-y-1">
-                <span className={tinyLabelClass()}>Gap</span>
+                <div className="space-y-0.5">
+                  <span className={tinyLabelClass()}>Gap</span>
+                  <p className={tinyHintClass()}>Tailwind spacing tokens or px</p>
+                </div>
                 <input
                   value={gapClass}
                   onChange={(event) => updateSingleField(/^gap-.+$/, event.target.value)}
@@ -1816,6 +1854,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
             <section className="space-y-5 border-b border-zinc-200 pb-5">
               <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Padding</p>
               <div className="space-y-1">
+                <p className={tinyHintClass()}>Tailwind spacing tokens or px</p>
                 <div className="flex items-center justify-between gap-3">
                   <span className={tinyLabelClass()}>Mode</span>
                   <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
@@ -1909,6 +1948,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   +
                 </button>
               </div>
+              <p className={tinyHintClass()}>Tailwind colors, hex, rgb, hsl, oklch, or var()</p>
               {hasBackgroundColor && (
                 <div className="flex gap-1">
                   <BackgroundColorCombobox
@@ -2089,6 +2129,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
                   +
                 </button>
               </div>
+              <p className={tinyHintClass()}>Tailwind colors, hex, rgb, hsl, oklch, or var()</p>
 
               <div className="space-y-1">
                 {hasBorderColor && (
@@ -2274,7 +2315,10 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               </div>
 
               <div className="space-y-1">
-                  <span className={tinyLabelClass()}>Border-weight</span>
+                  <div className="space-y-0.5">
+                    <span className={tinyLabelClass()}>Border-weight</span>
+                    <p className={tinyHintClass()}>Width in px</p>
+                  </div>
                   <div className="px-1 py-2">
                     <div className="relative grid grid-cols-[50px_1fr_50px] grid-rows-[51px_30px_51px] gap-x-[6px] gap-y-1 px-[10px] py-[8px]">
                       <span
@@ -2365,7 +2409,10 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3">
-                  <span className={tinyLabelClass()}>Corner radius</span>
+                  <div className="space-y-0.5">
+                    <span className={tinyLabelClass()}>Corner radius</span>
+                    <p className={tinyHintClass()}>Tailwind radius tokens or px</p>
+                  </div>
                   <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
                     {(['linked', 'independent'] as const).map((mode) => (
                       <button
@@ -2440,7 +2487,12 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               </div>
 
               <div className="space-y-3">
-                <div className={`${tinyLabelClass()}`}>Dimension Restrictions</div>
+                <div className="space-y-0.5">
+                  <div className={`${tinyLabelClass()}`}>Dimension Restrictions</div>
+                  <p className={tinyHintClass()}>
+                    Tailwind tokens, px, %, rem, em, vw, vh, auto, full, fit, min, or max
+                  </p>
+                </div>
                 <div className="space-y-2">
                   <div className="relative flex items-center gap-2">
                     <span className={`flex-1 ${tinyLabelClass()}`}>Width (Max/Min)</span>
