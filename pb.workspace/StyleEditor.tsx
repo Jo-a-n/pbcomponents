@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import tailwindColors from 'tailwindcss/colors'
 import type { ComponentGroup } from '@/lib/component-selection/types'
 import { componentNameToFileName } from '@/pb.workspace/componentNameToFileName'
 import {
@@ -10,17 +9,57 @@ import {
   buildBackgroundPickerDraftFromRgb,
   buildBackgroundToken,
   clampNumber,
-  decodeTailwindArbitraryValue,
   hslToRgb,
-  normalizeBackgroundColorValue,
-  normalizeBackgroundOpacityValue,
   parseHexColor,
   parseBackgroundToken,
   parseCssColorToRgb,
-  splitTopLevelOpacitySuffix,
-  unwrapArbitraryValue,
 } from '@/lib/style-editor/background-color.mjs'
-import { tokenizeClassString } from '@/lib/style-editor/class-tokens.mjs'
+import {
+  RADIUS_TOKEN_PATTERN,
+  RAW_EDITOR_GROUPS,
+  PINNED_BACKGROUND_COLOR_TOKENS,
+  TAILWIND_COLOR_OPTIONS,
+  shouldSuggestTailwindColors,
+  getSelectedGroup,
+  getBreadcrumb,
+  toClassTokens,
+  tokenizeClassInput,
+  fromClassTokens,
+  findToken,
+  replaceTokens,
+  tokenMatchesCategory,
+  getCategoryText,
+  getTokenValue,
+  formatPaddingValueForInput,
+  normalizePaddingValue,
+  getLimitTokenValue,
+  normalizeLimitValue,
+  parseComparableLengthValue,
+  guessPaddingMode,
+  resolveTailwindColorValue,
+  parseBorderColorToken,
+  getInheritedCurrentColor,
+  buildBorderColorToken,
+  formatBorderWidthValueForDisplay,
+  parseBorderWidthToken,
+  borderWidthTokenPattern,
+  getBorderWidthState,
+  nextBorderWidthCycleValue,
+  borderWidthValueToPreviewCss,
+  normalizeRadiusValue,
+  getRoundedValue,
+  guessCornerRadiusMode,
+  formatAxisValue,
+  componentTitle,
+  guessSizeMode,
+  sizeModeLabel,
+  guessDirection,
+  guessToggle,
+  removeSharedBorderWidthTokens,
+  removeBorderWidthTokens,
+  buildBorderWidthToken,
+  getPaddingTokensForAxis,
+} from '@/lib/style-editor/style-editor-helpers.mjs'
 
 type StyleValue = string | string[]
 type Styles = Record<string, StyleValue>
@@ -56,635 +95,6 @@ const DIRECTION_OPTIONS = [
   { label: 'Column', value: 'col', icon: '↓' },
   { label: 'Grid', value: 'grid', icon: '⋮⋮' },
 ] as const
-
-const PADDING_TOKEN_PATTERN = /^(p|px|py|pl|pr|pt|pb)-.+$/
-const MARGIN_TOKEN_PATTERN = /^(m|mx|my|ml|mr|mt|mb|ms|me)-.+$/
-const RADIUS_TOKEN_PATTERN = /^rounded(?:-(?:tl|tr|br|bl|t|r|b|l))?(?:-.+)?$/
-const LIMITS_TOKEN_PATTERN =
-  /^(rounded(?:-(?:tl|tr|br|bl|t|r|b|l))?(?:-.+)?|w-.+|h-.+|min-w-.+|max-w-.+|min-h-.+|max-h-.+|size-.+|basis-.+)$/
-const FLEX_TOKEN_PATTERN =
-  /^(flex|inline-flex|grid|inline-grid|flex-(?:row|col|wrap|nowrap|1|auto|initial|none)|grid-cols-.+|grid-rows-.+|col-.+|row-.+|auto-cols-.+|auto-rows-.+|items-.+|justify-.+|content-.+|self-.+|place-(?:items|content|self)-.+|gap(?:-[xy])?-.+|grow(?:-.+)?|shrink(?:-.+)?|order-.+)$/
-const TEXT_TOKEN_PATTERN =
-  /^(text-.+|font-.+|leading-.+|tracking-.+|whitespace-.+|break-.+|truncate|line-clamp-.+|uppercase|lowercase|capitalize|normal-case|italic|not-italic|antialiased|subpixel-antialiased|underline|overline|line-through|no-underline|decoration-.+|underline-offset-.+)$/
-const BACKGROUND_TOKEN_PATTERN =
-  /^(bg-(?!clip-padding$).+|from-.+|via-.+|to-.+)$/
-const BORDER_TOKEN_PATTERN =
-  /^(border(?:-[trblxy])?(?:-.+)?|divide(?:-[xy])?(?:-.+)?|outline(?:-.+)?)$/
-const EFFECTS_TOKEN_PATTERN =
-  /^(ring(?:-[trblxy])?(?:-.+)?|shadow(?:-.+)?|opacity-.+|mix-blend-.+|bg-blend-.+|blur(?:-.+)?|backdrop-.+)$/
-
-const RAW_EDITOR_GROUPS: Array<{
-  key: RawEditorCategory
-  label: string
-  placeholder: string
-  pattern: RegExp | null
-}> = [
-  { key: 'padding', label: 'Padding', placeholder: 'px-4 py-2', pattern: PADDING_TOKEN_PATTERN },
-  { key: 'margin', label: 'Margin', placeholder: 'mt-4 mx-auto', pattern: MARGIN_TOKEN_PATTERN },
-  { key: 'limits', label: 'Limits & Corners', placeholder: 'rounded-xl max-w-sm h-fit', pattern: LIMITS_TOKEN_PATTERN },
-  { key: 'flex', label: 'Flex', placeholder: 'flex items-center justify-between gap-4', pattern: FLEX_TOKEN_PATTERN },
-  { key: 'text', label: 'Text', placeholder: 'text-sm font-medium leading-5 text-zinc-700', pattern: TEXT_TOKEN_PATTERN },
-  { key: 'background', label: 'Background', placeholder: 'bg-white from-zinc-50 to-zinc-100', pattern: BACKGROUND_TOKEN_PATTERN },
-  { key: 'border', label: 'Border', placeholder: 'border border-zinc-200 outline-none', pattern: BORDER_TOKEN_PATTERN },
-  { key: 'effects', label: 'Effects', placeholder: 'shadow-sm ring-1 ring-zinc-200', pattern: EFFECTS_TOKEN_PATTERN },
-  { key: 'other', label: 'Other classes', placeholder: 'relative overflow-hidden transition', pattern: null },
-] as const
-
-const colorTokenCollator = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: 'base',
-})
-
-const PINNED_BACKGROUND_COLOR_TOKENS = ['black', 'white'] as const
-
-const TAILWIND_COLOR_OPTIONS = Object.entries(tailwindColors as Record<string, unknown>)
-  .flatMap(([family, palette]) => {
-    if (typeof palette === 'string') {
-      return [{ token: family, value: palette }]
-    }
-
-    if (!palette || typeof palette !== 'object') {
-      return []
-    }
-
-    return Object.entries(palette as Record<string, unknown>)
-      .filter(([, value]) => typeof value === 'string')
-      .map(([shade, value]) => ({
-        token: `${family}-${shade}`,
-        value: value as string,
-      }))
-  })
-  .sort((left, right) => {
-    const leftPinnedIndex = PINNED_BACKGROUND_COLOR_TOKENS.indexOf(
-      left.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
-    )
-    const rightPinnedIndex = PINNED_BACKGROUND_COLOR_TOKENS.indexOf(
-      right.token as (typeof PINNED_BACKGROUND_COLOR_TOKENS)[number]
-    )
-
-    if (leftPinnedIndex !== -1 || rightPinnedIndex !== -1) {
-      if (leftPinnedIndex === -1) return 1
-      if (rightPinnedIndex === -1) return -1
-      return leftPinnedIndex - rightPinnedIndex
-    }
-
-    return colorTokenCollator.compare(left.token, right.token)
-  })
-
-function shouldSuggestTailwindColors(value: string) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue) return true
-  return !/^(#|var\(|rgb\(|rgba\(|hsl\(|hsla\(|oklch\()/i.test(trimmedValue)
-}
-
-function getSelectedGroup(selectedComponent: string | null, components: ComponentGroup[]) {
-  if (!selectedComponent) return null
-  return (
-    components.find(
-      (group) => group.name === selectedComponent || group.children.includes(selectedComponent)
-    ) ?? null
-  )
-}
-
-function getBreadcrumb(selectedComponent: string | null, components: ComponentGroup[]) {
-  if (!selectedComponent) return null
-
-  const group = getSelectedGroup(selectedComponent, components)
-  if (!group) return [selectedComponent]
-  if (group.name === selectedComponent) return [group.name]
-  return [group.name, selectedComponent]
-}
-
-function toClassTokens(value: StyleValue | undefined) {
-  if (!value) return [] as string[]
-  const raw = Array.isArray(value) ? value.join(' ') : value
-  return tokenizeClassString(raw)
-}
-
-function tokenizeClassInput(value: string) {
-  return tokenizeClassString(value)
-}
-
-function fromClassTokens(tokens: string[], originalValue: StyleValue | undefined): StyleValue {
-  const normalized = Array.from(new Set(tokens.filter(Boolean)))
-  if (Array.isArray(originalValue)) {
-    return [normalized.join(' ')]
-  }
-  return normalized.join(' ')
-}
-
-function findToken(tokens: string[], pattern: RegExp) {
-  return tokens.find((token) => pattern.test(token)) ?? ''
-}
-
-function replaceTokens(tokens: string[], pattern: RegExp, nextTokens: string[]) {
-  return [...tokens.filter((token) => !pattern.test(token)), ...nextTokens.filter(Boolean)]
-}
-
-function categoryPattern(category: RawEditorCategory) {
-  return RAW_EDITOR_GROUPS.find((group) => group.key === category)?.pattern ?? null
-}
-
-function tokenMatchesCategory(token: string, category: RawEditorCategory) {
-  const pattern = categoryPattern(category)
-  if (category === 'other') {
-    return RAW_EDITOR_GROUPS
-      .filter((group) => group.key !== 'other')
-      .every((group) => !group.pattern?.test(token))
-  }
-
-  return pattern?.test(token) ?? false
-}
-
-function getCategoryText(tokens: string[], category: RawEditorCategory) {
-  return tokens.filter((token) => tokenMatchesCategory(token, category)).join(' ')
-}
-
-function getTokenValue(token: string, prefix: string) {
-  return token.startsWith(`${prefix}-`) ? token.slice(prefix.length + 1) : ''
-}
-
-function formatPaddingValueForInput(value: string) {
-  return unwrapArbitraryValue(value)
-}
-
-function normalizePaddingValue(value: string) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue) return ''
-  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
-  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
-  return trimmedValue
-}
-
-function getLimitTokenValue(token: string, prefix: 'min-w' | 'max-w' | 'min-h' | 'max-h') {
-  if (!token.startsWith(`${prefix}-`)) return ''
-
-  const value = token.slice(prefix.length + 1)
-  const arbitraryValueMatch = value.match(/^\[(.+)\]$/)
-  return arbitraryValueMatch ? arbitraryValueMatch[1] : value
-}
-
-function normalizeLimitValue(value: string) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue) return ''
-  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
-  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
-  return trimmedValue
-}
-
-function parseComparableLengthValue(value: string) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue) return null
-
-  const unwrappedValue = trimmedValue.match(/^\[(.+)\]$/)?.[1] ?? trimmedValue
-  const spacingScaleMatch = unwrappedValue.match(/^-?\d*\.?\d+$/)
-  if (spacingScaleMatch) {
-    return {
-      amount: Number(unwrappedValue),
-      unit: 'tailwind-spacing',
-    }
-  }
-
-  const match = unwrappedValue.match(/^(-?\d*\.?\d+)(px|rem|em|%|vw|vh)$/)
-  if (!match) return null
-
-  return {
-    amount: Number(match[1]),
-    unit: match[2],
-  }
-}
-
-function guessPaddingMode(tokens: string[]): PaddingMode {
-  return tokens.some((token) => /^(pl|pr|pt|pb)-.+$/.test(token)) ? 'sides' : 'axes'
-}
-
-function parseRoundedToken(token: string) {
-  if (token === 'rounded') {
-    return {
-      corner: 'all' as const,
-      value: '',
-    }
-  }
-
-  const cornerMatch = token.match(/^rounded-(tl|tr|br|bl|t|r|b|l)-(.+)$/)
-  if (cornerMatch) {
-    return {
-      corner: cornerMatch[1] as 't' | 'r' | 'b' | 'l' | FullCornerKey,
-      value: cornerMatch[2],
-    }
-  }
-
-  const allMatch = token.match(/^rounded-(.+)$/)
-  if (!allMatch) return null
-
-  return {
-    corner: 'all' as const,
-    value: allMatch[1],
-  }
-}
-
-function formatRadiusValueForInput(value: string) {
-  return unwrapArbitraryValue(value)
-}
-
-function resolveTailwindColorValue(colorValue: string) {
-  const trimmedValue = decodeTailwindArbitraryValue(colorValue.trim())
-  if (!trimmedValue) return null
-
-  if (
-    trimmedValue.startsWith('#') ||
-    trimmedValue.startsWith('rgb(') ||
-    trimmedValue.startsWith('rgba(') ||
-    trimmedValue.startsWith('hsl(') ||
-    trimmedValue.startsWith('hsla(') ||
-    trimmedValue.startsWith('oklch(') ||
-    trimmedValue.startsWith('var(')
-  ) {
-    return trimmedValue
-  }
-
-  const directMatch = (tailwindColors as Record<string, unknown>)[trimmedValue]
-  if (typeof directMatch === 'string') return directMatch
-
-  const colorMatch = trimmedValue.match(/^([a-z-]+)-(\d{2,3})$/)
-  if (!colorMatch) return null
-
-  const [, family, shade] = colorMatch
-  const palette = (tailwindColors as Record<string, unknown>)[family]
-  if (!palette || typeof palette !== 'object') return null
-
-  const shadeValue = (palette as Record<string, string>)[shade]
-  return typeof shadeValue === 'string' ? shadeValue : null
-}
-
-function parseBorderColorToken(token: string) {
-  if (!token.startsWith('border-')) {
-    return {
-      colorValue: '',
-      opacityValue: '100',
-    }
-  }
-
-  const { colorValue, opacityValue } = splitTopLevelOpacitySuffix(token.slice(7))
-  return {
-    colorValue: decodeTailwindArbitraryValue(unwrapArbitraryValue(colorValue)),
-    opacityValue: opacityValue || '100',
-  }
-}
-
-function parseTextColorToken(token: string) {
-  if (!token.startsWith('text-')) return null
-
-  const value = token.slice(5)
-  if (!value) return null
-
-  if (
-    /^(left|center|right|justify|start|end)$/.test(value) ||
-    /^(xs|sm|base|lg|xl|\d+xl)$/.test(value) ||
-    /^\[(length|size):.+\]$/.test(value)
-  ) {
-    return null
-  }
-
-  return decodeTailwindArbitraryValue(unwrapArbitraryValue(value))
-}
-
-function getInheritedCurrentColor(tokens: string[]) {
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    const colorValue = parseTextColorToken(tokens[index])
-    if (!colorValue) continue
-
-    const resolvedValue = resolveTailwindColorValue(colorValue)
-    return {
-      label: colorValue,
-      previewColor: resolvedValue ?? 'currentColor',
-      source: 'Text color',
-    }
-  }
-
-  return {
-    label: 'var(--foreground)',
-    previewColor: 'var(--foreground)',
-    source: 'Body text color',
-  }
-}
-
-function buildBorderColorToken(colorValue: string, opacityValue: string) {
-  const normalizedColorValue = normalizeBackgroundColorValue(colorValue)
-  if (!normalizedColorValue) return ''
-
-  const normalizedOpacityValue = normalizeBackgroundOpacityValue(opacityValue)
-  return normalizedOpacityValue === '100'
-    ? `border-${normalizedColorValue}`
-    : `border-${normalizedColorValue}/${normalizedOpacityValue}`
-}
-
-function formatBorderWidthValueForInput(value: string) {
-  const normalizedValue = unwrapArbitraryValue(value)
-  if (normalizedValue === '0') return '0px'
-  if (normalizedValue === '2') return '2px'
-  if (normalizedValue === '4') return '4px'
-  if (normalizedValue === '8') return '8px'
-  return normalizedValue
-}
-
-function formatBorderWidthValueForDisplay(value: string) {
-  if (value === 'none') return value
-
-  const normalizedValue = unwrapArbitraryValue(value).trim()
-  const pxMatch = normalizedValue.match(/^(-?\d*\.?\d+)px$/)
-  if (pxMatch) return pxMatch[1]
-  return normalizedValue
-}
-
-function isArbitraryBorderWidthValue(value: string) {
-  const normalizedValue = unwrapArbitraryValue(value).trim()
-  return /^-?\d*\.?\d+(px|rem|em)?$/.test(normalizedValue)
-}
-
-function parseBorderWidthToken(token: string) {
-  if (token === 'border-none') {
-    return { target: 'all' as const, value: 'none' }
-  }
-
-  if (token === 'border') {
-    return { target: 'all' as const, value: '1px' }
-  }
-
-  const allMatch = token.match(/^border-(0|2|4|8|\[.+\])$/)
-  if (allMatch && (allMatch[1][0] !== '[' || isArbitraryBorderWidthValue(allMatch[1]))) {
-    return { target: 'all' as const, value: formatBorderWidthValueForInput(allMatch[1]) }
-  }
-
-  const sideMatch = token.match(/^border-([trblxy])$/)
-  if (sideMatch) {
-    return {
-      target: borderWidthShorthandToTarget(sideMatch[1]),
-      value: '1px',
-    }
-  }
-
-  const sideValueMatch = token.match(/^border-([trblxy])-(0|2|4|8|\[.+\])$/)
-  if (
-    sideValueMatch &&
-    (sideValueMatch[2][0] !== '[' || isArbitraryBorderWidthValue(sideValueMatch[2]))
-  ) {
-    return {
-      target: borderWidthShorthandToTarget(sideValueMatch[1]),
-      value: formatBorderWidthValueForInput(sideValueMatch[2]),
-    }
-  }
-
-  return null
-}
-
-function borderWidthShorthandToTarget(value: string): BorderWidthTarget {
-  switch (value) {
-    case 't':
-      return 'top'
-    case 'r':
-      return 'right'
-    case 'b':
-      return 'bottom'
-    case 'l':
-      return 'left'
-    case 'x':
-      return 'x'
-    case 'y':
-      return 'y'
-    default:
-      return 'all'
-  }
-}
-
-function borderWidthTargetToTokenPrefix(target: BorderWidthTarget) {
-  switch (target) {
-    case 'all':
-      return 'border'
-    case 'top':
-      return 'border-t'
-    case 'right':
-      return 'border-r'
-    case 'bottom':
-      return 'border-b'
-    case 'left':
-      return 'border-l'
-    case 'x':
-      return 'border-x'
-    case 'y':
-      return 'border-y'
-  }
-}
-
-function normalizeBorderWidthValue(value: string) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue) return ''
-  if (trimmedValue === 'none') return 'none'
-  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
-  if (/^-?\d*\.?\d+$/.test(trimmedValue)) return `[${trimmedValue}px]`
-  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
-  return trimmedValue
-}
-
-function buildBorderWidthToken(target: BorderWidthTarget, value: string) {
-  const normalizedValue = normalizeBorderWidthValue(value)
-  if (!normalizedValue) return ''
-
-  if (normalizedValue === 'none') {
-    return target === 'all' ? 'border-none' : `${borderWidthTargetToTokenPrefix(target)}-0`
-  }
-
-  const rawValue = unwrapArbitraryValue(normalizedValue)
-  const prefix = borderWidthTargetToTokenPrefix(target)
-
-  if (rawValue === '1px') return prefix
-  if (rawValue === '0px') return `${prefix}-0`
-  if (rawValue === '2px') return `${prefix}-2`
-  if (rawValue === '4px') return `${prefix}-4`
-  if (rawValue === '8px') return `${prefix}-8`
-  return `${prefix}-[${rawValue}]`
-}
-
-function removeBorderWidthTokens(tokens: string[]) {
-  return tokens.filter((token) => parseBorderWidthToken(token) == null)
-}
-
-function removeSharedBorderWidthTokens(tokens: string[]) {
-  return tokens.filter((token) => parseBorderWidthToken(token)?.target !== 'all')
-}
-
-function borderWidthTokenPattern(target: BorderWidthTarget) {
-  const prefix = borderWidthTargetToTokenPrefix(target)
-  return new RegExp(`^${prefix}(?:-(?:0|2|4|8|\\[.+\\]))?$`)
-}
-
-function getBorderWidthState(tokens: string[]) {
-  let allValue = ''
-  let xValue = ''
-  let yValue = ''
-  let topExplicit = ''
-  let rightExplicit = ''
-  let bottomExplicit = ''
-  let leftExplicit = ''
-  let hasNone = false
-
-  tokens.forEach((token) => {
-    const parsedToken = parseBorderWidthToken(token)
-    if (!parsedToken) return
-
-    if (parsedToken.value === 'none') {
-      hasNone = true
-    }
-
-    switch (parsedToken.target) {
-      case 'all':
-        allValue = parsedToken.value
-        break
-      case 'x':
-        xValue = parsedToken.value
-        break
-      case 'y':
-        yValue = parsedToken.value
-        break
-      case 'top':
-        topExplicit = parsedToken.value
-        break
-      case 'right':
-        rightExplicit = parsedToken.value
-        break
-      case 'bottom':
-        bottomExplicit = parsedToken.value
-        break
-      case 'left':
-        leftExplicit = parsedToken.value
-        break
-    }
-  })
-
-  const effectiveTop = topExplicit || yValue || allValue
-  const effectiveRight = rightExplicit || xValue || allValue
-  const effectiveBottom = bottomExplicit || yValue || allValue
-  const effectiveLeft = leftExplicit || xValue || allValue
-  const hasSideOverrides = Boolean(topExplicit || rightExplicit || bottomExplicit || leftExplicit || xValue || yValue)
-  const isUniform =
-    Boolean(effectiveTop) &&
-    effectiveTop === effectiveRight &&
-    effectiveTop === effectiveBottom &&
-    effectiveTop === effectiveLeft
-
-  return {
-    allValue,
-    xValue,
-    yValue,
-    topExplicit,
-    rightExplicit,
-    bottomExplicit,
-    leftExplicit,
-    effectiveTop,
-    effectiveRight,
-    effectiveBottom,
-    effectiveLeft,
-    hasNone,
-    hasSideOverrides,
-    uniformValue: isUniform ? effectiveTop : '',
-  }
-}
-
-function nextBorderWidthCycleValue(value: string) {
-  const normalizedValue = unwrapArbitraryValue(value).trim()
-  const numericMatch = normalizedValue.match(/^(-?\d*\.?\d+)px$/)
-  if (numericMatch) {
-    const currentNumber = Number(numericMatch[1])
-    const nextNumber = currentNumber + 1
-    if (Number.isFinite(nextNumber)) {
-      if (nextNumber < 1) return '1px'
-      return `${nextNumber}px`
-    }
-  }
-
-  return '1px'
-}
-
-function borderWidthValueToPreviewCss(value: string) {
-  if (!value || value === 'none') return '0px'
-
-  const normalizedValue = unwrapArbitraryValue(value).trim()
-  const numericMatch = normalizedValue.match(/^(-?\d*\.?\d+)px$/)
-  if (!numericMatch) return normalizedValue
-
-  return Number(numericMatch[1]) > 0 ? '3px' : '0px'
-}
-
-function normalizeRadiusValue(value: string) {
-  const trimmedValue = value.trim()
-  if (!trimmedValue) return ''
-  if (/^\[.*\]$/.test(trimmedValue)) return trimmedValue
-  if (/^-?\d*\.?\d+px$/.test(trimmedValue)) return `[${trimmedValue}]`
-  return trimmedValue
-}
-
-function getRoundedValue(tokens: string[], target: 'all' | 't' | 'r' | 'b' | 'l' | FullCornerKey) {
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    const parsedToken = parseRoundedToken(tokens[index])
-    if (parsedToken?.corner === target) {
-      return formatRadiusValueForInput(parsedToken.value)
-    }
-  }
-
-  return undefined
-}
-
-function guessCornerRadiusMode(tokens: string[]): CornerRadiusMode {
-  return tokens.some((token) => {
-    const parsedToken = parseRoundedToken(token)
-    return parsedToken != null && ['tl', 'tr', 'bl', 'br'].includes(parsedToken.corner)
-  })
-    ? 'independent'
-    : 'linked'
-}
-
-function parsePairedValue(value: string) {
-  return value
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .slice(0, 2)
-}
-
-function formatAxisValue(firstValue: string, secondValue: string) {
-  if (!firstValue && !secondValue) return ''
-  if (firstValue === secondValue) return firstValue
-  return `${firstValue || '0'}, ${secondValue || '0'}`
-}
-
-function componentTitle(selectedComponent: string | null) {
-  return selectedComponent ?? 'Division'
-}
-
-function guessSizeMode(tokens: string[], axis: 'w' | 'h') {
-  const fullToken = axis === 'w' ? /^(w-full|flex-1|basis-full)$/ : /^h-full$/
-  const hugToken = axis === 'w' ? /^w-fit$/ : /^h-fit$/
-
-  if (tokens.some((token) => fullToken.test(token))) return 'Fill'
-  if (tokens.some((token) => hugToken.test(token))) return 'Hug'
-  return 'Fixed'
-}
-
-function sizeModeLabel(mode: 'Fill' | 'Hug' | 'Fixed', axis: 'w' | 'h') {
-  if (mode === 'Fill') return axis === 'w' ? 'Fill (w-full)' : 'Fill (h-full)'
-  if (mode === 'Hug') return axis === 'w' ? 'Hug (w-fit)' : 'Hug (h-fit)'
-  return 'Fixed (manual)'
-}
-
-function guessDirection(tokens: string[]) {
-  if (tokens.includes('grid')) return 'grid'
-  if (tokens.includes('flex-col')) return 'col'
-  return 'row'
-}
-
-function guessToggle(tokens: string[], token: string) {
-  return tokens.includes(token)
-}
 
 function switchTrackClass(isActive: boolean) {
   return `relative h-5 w-8 rounded-full transition ${isActive ? 'bg-emerald-500' : 'bg-zinc-300'}`
@@ -1501,6 +911,14 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const hasBorderColor = Boolean(borderDetails.colorValue)
   const borderWidthState = getBorderWidthState(classTokens)
   const inheritedBorderColor = getInheritedCurrentColor(classTokens)
+  const borderWeightPreviewColorBase = borderPreviewColor ?? inheritedBorderColor.previewColor
+  const borderWeightPreviewOpacity = Number.isNaN(borderPreviewOpacity)
+    ? 1
+    : Math.min(100, Math.max(0, borderPreviewOpacity)) / 100
+  const borderWeightPreviewColor =
+    borderWeightPreviewOpacity >= 1
+      ? borderWeightPreviewColorBase
+      : `color-mix(in srgb, ${borderWeightPreviewColorBase} ${borderWeightPreviewOpacity * 100}%, transparent)`
   const hasBorderNone = classTokens.includes('border-none')
   const centerBorderWeightValue =
     !borderWidthState.hasSideOverrides && borderWidthState.allValue !== 'none'
@@ -1519,25 +937,25 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
         borderBottomWidth: borderWidthValueToPreviewCss(borderWidthState.bottomExplicit),
         borderLeftWidth: borderWidthValueToPreviewCss(borderWidthState.leftExplicit),
         borderStyle: 'solid',
-        borderColor: '#454545',
+        borderColor: borderWeightPreviewColor,
       }
     : borderWidthState.allValue && borderWidthState.allValue !== 'none'
       ? {
           borderWidth: borderWidthValueToPreviewCss(borderWidthState.allValue),
           borderStyle: 'solid',
-          borderColor: '#454545',
+          borderColor: borderWeightPreviewColor,
         }
       : hasBorderNone
         ? {
             borderWidth: '0px',
             borderStyle: 'solid',
-            borderColor: '#454545',
+            borderColor: borderWeightPreviewColor,
           }
         : {
             borderWidth: '1px',
             borderStyle: 'dashed',
-            borderColor: '#d4d4d4',
-          }
+            borderColor: borderWeightPreviewColor,
+          };
   const minWidthClass = findToken(classTokens, /^min-w-.+/)
   const maxWidthClass = findToken(classTokens, /^max-w-.+/)
   const minHeightClass = findToken(classTokens, /^min-h-.+/)
@@ -2139,19 +1557,6 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   ) => {
     const normalizedValue = normalizePaddingValue(nextValue)
     updateSingleField(pattern, normalizedValue ? `${prefix}-${normalizedValue}` : '')
-  }
-
-  const getPaddingTokensForAxis = (axis: PaddingAxis, nextValue: string) => {
-    const values = parsePairedValue(nextValue).map(normalizePaddingValue).filter(Boolean)
-
-    if (values.length === 0) return [] as string[]
-    if (values.length === 1 || values[0] === values[1]) {
-      return [`p${axis}-${values[0]}`]
-    }
-
-    return axis === 'x'
-      ? [`pl-${values[0]}`, `pr-${values[1]}`]
-      : [`pt-${values[0]}`, `pb-${values[1]}`]
   }
 
   const handlePaddingAxisChange = (axis: PaddingAxis, nextValue: string) => {
