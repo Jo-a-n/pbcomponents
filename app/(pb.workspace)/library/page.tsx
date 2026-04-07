@@ -1,22 +1,11 @@
 import * as React from 'react'
 
 import { componentHierarchy } from '@/lib/component-selection/componentHierarchy.generated'
+import { componentNameToFileName } from '@/pb.workspace/componentNameToFileName'
 import { LibraryWorkspace } from '@/pb.workspace/LibraryWorkspace'
 
 type ComponentModule = Record<string, React.ComponentType<{ children?: React.ReactNode; className?: string }>>
 type ViewModule = Record<string, React.ComponentType>
-
-function componentNameToFileName(componentName: string) {
-  const generatedMatch = componentName.match(/^Div(\d{3})$/)
-  if (generatedMatch) {
-    return `div-${generatedMatch[1]}`
-  }
-
-  return componentName
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
-    .toLowerCase()
-}
 
 async function loadComponentModule(fileName: string) {
   const componentModule = (await import(`@/components/${fileName}.tsx`)) as ComponentModule

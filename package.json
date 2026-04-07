@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "generate:hierarchy": "node scripts/generate-component-hierarchy.mjs",
+    "generate:hierarchy": "node scripts/pb.workspace/generate-component-hierarchy.mjs",
     "dev": "npm run generate:hierarchy && next dev",
     "build": "npm run generate:hierarchy && next build",
     "start": "next start",
-    "lint": "npm run generate:hierarchy && eslint"
+    "lint": "npm run generate:hierarchy && eslint",
+    "test": "node --test app/tests/*.test.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

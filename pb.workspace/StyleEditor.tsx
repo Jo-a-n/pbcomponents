@@ -3,6 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import tailwindColors from 'tailwindcss/colors'
 import type { ComponentGroup } from '@/lib/component-selection/types'
+import { componentNameToFileName } from '@/pb.workspace/componentNameToFileName'
 import {
   buildBackgroundPickerDraft,
   buildBackgroundPickerDraftFromHsl,
@@ -134,18 +135,6 @@ function shouldSuggestTailwindColors(value: string) {
   const trimmedValue = value.trim()
   if (!trimmedValue) return true
   return !/^(#|var\(|rgb\(|rgba\(|hsl\(|hsla\(|oklch\()/i.test(trimmedValue)
-}
-
-function componentNameToFileName(componentName: string) {
-  const generatedMatch = componentName.match(/^Div(\d{3})$/)
-  if (generatedMatch) {
-    return `div-${generatedMatch[1]}`
-  }
-
-  return componentName
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
-    .toLowerCase()
 }
 
 function getSelectedGroup(selectedComponent: string | null, components: ComponentGroup[]) {

@@ -4,7 +4,7 @@ import { join } from 'path'
 import { NextResponse } from 'next/server'
 
 const execFileAsync = promisify(execFile)
-const HIERARCHY_SCRIPT = join(process.cwd(), 'scripts', 'generate-component-hierarchy.mjs')
+const HIERARCHY_SCRIPT = join(process.cwd(), 'scripts', 'pb.workspace', 'generate-component-hierarchy.mjs')
 
 export async function POST() {
   try {

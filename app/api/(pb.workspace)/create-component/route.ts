@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server'
 
 const execFileAsync = promisify(execFile)
 const COMPONENTS_DIR = join(process.cwd(), 'components')
-const HIERARCHY_SCRIPT = join(process.cwd(), 'scripts', 'generate-component-hierarchy.mjs')
+const HIERARCHY_SCRIPT = join(process.cwd(), 'scripts', 'pb.workspace', 'generate-component-hierarchy.mjs')
 const FILE_PREFIX = 'div-'
 
 function getNextComponentIndex(files: string[]) {
