@@ -4,9 +4,9 @@ export function FrameView() {
   return (
     <Frame>
       <FrameTitle>
-        Card Title Card TitleCard TitleCard TitleCard TitleCard TitleCard TitleCard TitleCard Title
+        Frame Title
       </FrameTitle>
-      <FrameAction>Card Action</FrameAction>
+      <FrameAction>Frame Action</FrameAction>
     </Frame>
   )
 }

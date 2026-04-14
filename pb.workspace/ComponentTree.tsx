@@ -19,7 +19,7 @@ export function ComponentTree({
   onCreateComponent,
   onDeleteComponent,
 }: ComponentTreeProps) {
-  const [expanded, setExpanded] = useState(true)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const [isCreating, setIsCreating] = useState(false)
   const [deletingComponent, setDeletingComponent] = useState<string | null>(null)
   const [createMessage, setCreateMessage] = useState('')
@@ -111,14 +111,14 @@ export function ComponentTree({
                 className="text-xs"
                 onClick={(e) => {
                   e.stopPropagation()
-                  setExpanded(!expanded)
+                  setExpandedGroups((prev) => ({ ...prev, [comp.name]: !(prev[comp.name] ?? true) }))
                 }}
               >
-                {expanded ? '▼' : '▶'}
+                {(expandedGroups[comp.name] ?? true) ? '▼' : '▶'}
               </button>
             </div>
 
-            {expanded && (
+            {(expandedGroups[comp.name] ?? true) && (
               <div className="ml-4 space-y-1">
                 {comp.children.map((child) => (
                   <div
