@@ -18,6 +18,7 @@ export function LibraryWorkspace({ components, children }: LibraryWorkspaceProps
   const router = useRouter()
   const {
     selectedComponent,
+    selectedComponentSize,
     setSelectedComponent,
     canvasRef,
     navigateDown,
@@ -117,7 +118,11 @@ export function LibraryWorkspace({ components, children }: LibraryWorkspaceProps
         </div>
       </main>
 
-      <StyleEditor selectedComponent={selectedComponent} components={components} />
+      <StyleEditor
+        selectedComponent={selectedComponent}
+        selectedComponentSize={selectedComponentSize}
+        components={components}
+      />
     </div>
   )
 }

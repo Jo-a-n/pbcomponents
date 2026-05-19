@@ -3,6 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentGroup } from '@/lib/component-selection/types'
 import { componentNameToFileName } from '@/pb.workspace/componentNameToFileName'
+import type { SelectedComponentSize } from '@/lib/component-selection/useComponentSelection'
 import {
   buildBackgroundPickerDraft,
   buildBackgroundPickerDraftFromHsl,
@@ -55,6 +56,11 @@ import {
   sizeModeLabel,
   guessDirection,
   guessToggle,
+  guessWrap,
+  getGapValue,
+  buildGapToken,
+  getAlignmentState,
+  visualToAlignmentTokens,
   removeSharedBorderWidthTokens,
   removeBorderWidthTokens,
   buildBorderWidthToken,
@@ -71,9 +77,24 @@ type FullCornerKey = 'tl' | 'tr' | 'bl' | 'br'
 type LimitAxis = 'width' | 'height'
 type LimitKind = 'min' | 'max'
 type LimitFieldKey = `${LimitAxis}-${LimitKind}`
+type SizeAxis = 'w' | 'h'
+type SizeMode = 'Fill' | 'Hug' | 'Fixed'
 type BackgroundPickerMode = 'hex' | 'rgb' | 'hsl'
 type BorderWidthSide = 'top' | 'right' | 'bottom' | 'left'
 type BorderWidthTarget = 'all' | 'x' | 'y' | BorderWidthSide
+type GapMode = 'universal' | 'axes'
+type GapAxis = 'x' | 'y'
+type AlignmentMatrixValue =
+  | 'top-left'
+  | 'top-middle'
+  | 'top-right'
+  | 'middle-left'
+  | 'middle-middle'
+  | 'middle-right'
+  | 'bottom-left'
+  | 'bottom-middle'
+  | 'bottom-right'
+type AlignmentResetTarget = AlignmentMatrixValue | null
 type RawEditorCategory =
   | 'padding'
   | 'margin'
@@ -87,13 +108,110 @@ type RawEditorCategory =
 
 interface StyleEditorProps {
   selectedComponent: string | null
+  selectedComponentSize: SelectedComponentSize | null
   components: ComponentGroup[]
 }
 
 const DIRECTION_OPTIONS = [
-  { label: 'Row', value: 'row', icon: '→' },
-  { label: 'Column', value: 'col', icon: '↓' },
-  { label: 'Grid', value: 'grid', icon: '⋮⋮' },
+  { label: 'Row', value: 'row' },
+  { label: 'Column', value: 'col' },
+  { label: 'Grid', value: 'grid' },
+] as const
+
+const FLEX_DIRECTION_OPTIONS = [
+  { label: 'flex-row →', value: 'row', group: 'row' },
+  { label: 'flex-row-reverse ←', value: 'row-reverse', group: 'row' },
+  { label: 'flex-col ↓', value: 'col', group: 'col' },
+  { label: 'flex-col-reverse ↑', value: 'col-reverse', group: 'col' },
+] as const
+
+const WRAP_OPTIONS = [
+  { label: 'flex-nowrap', value: 'flex-nowrap' },
+  { label: 'flex-wrap', value: 'flex-wrap' },
+  { label: 'flex-wrap-reverse', value: 'flex-wrap-reverse' },
+] as const
+
+const JUSTIFY_OPTIONS = [
+  { label: 'none', value: '' },
+  { label: 'justify-normal', value: 'justify-normal' },
+  { label: 'justify-between', value: 'justify-between' },
+  { label: 'justify-around', value: 'justify-around' },
+  { label: 'justify-evenly', value: 'justify-evenly' },
+  { label: 'justify-stretch', value: 'justify-stretch' },
+] as const
+
+const JUSTIFY_HINTS = {
+  none: 'Set how items are distributed.',
+  normal: 'Uses the browser default justify-content behavior.',
+  between: 'Distributes items with equal free space between them.',
+  around: 'Distributes free space around each item.',
+  evenly: 'Distributes equal free space between and around items.',
+  stretch: 'Stretches items or tracks when the layout mode supports it.',
+} as const
+
+const CONTENT_OPTIONS = [
+  { label: 'none', value: '' },
+  { label: 'content-normal', value: 'content-normal' },
+  { label: 'content-between', value: 'content-between' },
+  { label: 'content-around', value: 'content-around' },
+  { label: 'content-evenly', value: 'content-evenly' },
+  { label: 'content-stretch', value: 'content-stretch' },
+] as const
+
+const CONTENT_HINTS = {
+  none: 'Set how wrapped lines are distributed.',
+  normal: 'Uses the browser default align-content behavior.',
+  between: 'Distributes wrapped lines with equal free space between them.',
+  around: 'Distributes free space around each wrapped line.',
+  evenly: 'Distributes equal free space between and around wrapped lines.',
+  stretch: 'Stretches wrapped lines to fill the wrap axis when supported.',
+} as const
+
+const SELF_OPTIONS = [
+  { label: 'Default', value: '' },
+  { label: 'Auto', value: 'self-auto' },
+  { label: 'Start', value: 'self-start' },
+  { label: 'End', value: 'self-end' },
+  { label: 'Center', value: 'self-center' },
+  { label: 'Stretch', value: 'self-stretch' },
+  { label: 'Baseline', value: 'self-baseline' },
+] as const
+
+const FLEX_VALUE_OPTIONS = [
+  { label: 'Default', value: '' },
+  { label: 'Fill available space', value: 'flex-1' },
+  { label: 'Auto size, can grow', value: 'flex-auto' },
+  { label: 'Initial size, can shrink', value: 'flex-initial' },
+  { label: 'Fixed size', value: 'flex-none' },
+] as const
+
+const GROW_OPTIONS = [
+  { label: 'Default', value: '' },
+  { label: 'Can grow', value: 'grow' },
+  { label: 'Do not grow', value: 'grow-0' },
+] as const
+
+const SHRINK_OPTIONS = [
+  { label: 'Default', value: '' },
+  { label: 'Can shrink', value: 'shrink' },
+  { label: 'Do not shrink', value: 'shrink-0' },
+] as const
+
+const ALIGNMENT_MATRIX_OPTIONS: ReadonlyArray<{
+  value: AlignmentMatrixValue
+  label: string
+  vertical: 'start' | 'center' | 'end'
+  horizontal: 'start' | 'center' | 'end'
+}> = [
+  { value: 'top-left', label: 'Top and left', vertical: 'start', horizontal: 'start' },
+  { value: 'top-middle', label: 'Top and middle', vertical: 'start', horizontal: 'center' },
+  { value: 'top-right', label: 'Top and right', vertical: 'start', horizontal: 'end' },
+  { value: 'middle-left', label: 'Middle and left', vertical: 'center', horizontal: 'start' },
+  { value: 'middle-middle', label: 'Middle and middle', vertical: 'center', horizontal: 'center' },
+  { value: 'middle-right', label: 'Middle and right', vertical: 'center', horizontal: 'end' },
+  { value: 'bottom-left', label: 'Bottom and left', vertical: 'end', horizontal: 'start' },
+  { value: 'bottom-middle', label: 'Bottom and middle', vertical: 'end', horizontal: 'center' },
+  { value: 'bottom-right', label: 'Bottom and right', vertical: 'end', horizontal: 'end' },
 ] as const
 
 function switchTrackClass(isActive: boolean) {
@@ -113,7 +231,152 @@ function tinyHintClass() {
 }
 
 function fieldShellClass() {
-  return 'flex h-6 items-center gap-1 rounded-lg bg-gray-100 px-2 text-[12px] font-medium text-black'
+  return '[font-family:var(--font-work-sans)] flex h-6 items-center gap-1 rounded-lg bg-gray-100 px-2 text-[12px] font-medium leading-[110%] text-black/70'
+}
+
+function fieldSelectClass() {
+  return '[font-family:var(--font-work-sans)] w-full bg-transparent text-[12px] font-medium leading-[110%] text-black/70 outline-none'
+}
+
+function fixedSizeInputClass(hasValue: boolean) {
+  return `[font-family:var(--font-work-sans)] h-6 min-w-0 flex-1 bg-transparent text-[12px] font-medium leading-[110%] outline-none ${
+    hasValue ? 'text-black/70' : 'text-black/40'
+  }`
+}
+
+function advancedFieldInputClass(hasValue: boolean) {
+  return `[font-family:var(--font-work-sans)] h-6 w-full rounded-lg bg-gray-100 px-2 text-[12px] font-medium leading-[110%] outline-none ${
+    hasValue ? 'text-black/70' : 'text-black/40'
+  }`
+}
+
+function sizeTokenPattern(axis: SizeAxis) {
+  return axis === 'w' ? /^(w-.+|basis-.+|flex-1)$/ : /^h-.+$/
+}
+
+function getFixedSizePxValue(tokens: string[], axis: SizeAxis) {
+  const token = findToken(tokens, axis === 'w' ? /^w-\[.+\]$/ : /^h-\[.+\]$/)
+  const value = getTokenValue(token, axis).match(/^\[(.+)\]$/)?.[1] ?? ''
+  const pxMatch = value.match(/^(-?\d*\.?\d+)px$/)
+  return pxMatch ? pxMatch[1] : ''
+}
+
+function normalizeFixedSizePxValue(value: string) {
+  const trimmedValue = value.trim().replace(/px$/i, '').trim()
+  if (!trimmedValue) return ''
+  return /^-?\d*\.?\d+$/.test(trimmedValue) ? `${trimmedValue}px` : ''
+}
+
+function formatMeasuredSizeValue(value: number | undefined) {
+  if (value == null || !Number.isFinite(value)) return ''
+  const roundedValue = Math.round(value * 10) / 10
+  return Number.isInteger(roundedValue) ? String(roundedValue) : roundedValue.toFixed(1)
+}
+
+function SizeModeCombobox({
+  label,
+  axis,
+  mode,
+  fixedValue,
+  fixedPlaceholder,
+  onModeChange,
+  onFixedValueChange,
+}: {
+  label: string
+  axis: SizeAxis
+  mode: SizeMode
+  fixedValue: string
+  fixedPlaceholder: string
+  onModeChange: (axis: SizeAxis, mode: SizeMode) => void
+  onFixedValueChange: (axis: SizeAxis, value: string) => void
+}) {
+  const isFixed = mode === 'Fixed'
+
+  return (
+    <label className="space-y-1">
+      <span className={tinyLabelClass()}>{label}</span>
+      <div className={fieldShellClass()}>
+        <select
+          value={mode}
+          onChange={(event) => onModeChange(axis, event.target.value as SizeMode)}
+          className={`[font-family:var(--font-work-sans)] bg-transparent text-[12px] font-medium leading-[110%] text-black/70 outline-none ${
+            isFixed ? 'w-[76px] shrink-0' : 'w-full'
+          }`}
+        >
+          <option value="Fill">{sizeModeLabel('Fill', axis)}</option>
+          <option value="Hug">{sizeModeLabel('Hug', axis)}</option>
+          <option value="Fixed">{sizeModeLabel('Fixed', axis)}</option>
+        </select>
+        {isFixed && (
+          <>
+            <span aria-hidden="true" className="h-3 w-px shrink-0 bg-black/10" />
+            <input
+              value={fixedValue}
+              onChange={(event) => onFixedValueChange(axis, event.target.value)}
+              className={fixedSizeInputClass(Boolean(fixedValue))}
+              placeholder={fixedPlaceholder}
+              inputMode="decimal"
+              aria-label={`Fixed ${label.toLowerCase()} in pixels`}
+            />
+            <span className="shrink-0 text-[11px] text-black/45">px</span>
+          </>
+        )}
+      </div>
+    </label>
+  )
+}
+
+function alignmentIconClass(isActive: boolean) {
+  return [
+    'grid h-[14px] w-[14px] grid-rows-3 gap-px rounded-[4px] transition',
+    isActive ? 'opacity-100' : 'opacity-30',
+  ].join(' ')
+}
+
+function flexTypeDotClass() {
+  return 'h-[3px] w-[3px] rounded-[2px] bg-current'
+}
+
+function FlexTypeIcon({ type }: { type: 'row' | 'col' | 'grid' }) {
+  if (type === 'row') {
+    return (
+      <span aria-hidden="true" className="flex w-[13px] items-center gap-[2px]">
+        {Array.from({ length: 3 }, (_, index) => (
+          <span key={index} className={flexTypeDotClass()} />
+        ))}
+      </span>
+    )
+  }
+
+  if (type === 'col') {
+    return (
+      <span aria-hidden="true" className="flex h-[13px] flex-col gap-[2px]">
+        {Array.from({ length: 3 }, (_, index) => (
+          <span key={index} className={flexTypeDotClass()} />
+        ))}
+      </span>
+    )
+  }
+
+  return (
+    <span aria-hidden="true" className="grid h-[13px] w-[13px] grid-cols-3 gap-[2px]">
+      {Array.from({ length: 9 }, (_, index) => (
+        <span key={index} className={flexTypeDotClass()} />
+      ))}
+    </span>
+  )
+}
+
+function GapAxisIcon({ axis }: { axis: GapAxis }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex h-full shrink-0 items-center gap-1 ${axis === 'y' ? '-rotate-90' : ''}`}
+    >
+      <span className="h-full w-[5px] rounded-full bg-black/20" />
+      <span className="h-full w-[5px] rounded-full bg-black/20" />
+    </span>
+  )
 }
 
 function markerClass(marker: PaddingMarker) {
@@ -343,6 +606,70 @@ function BorderWeightField({
         aria-label={`${side} border width`}
       />
       {side === 'right' || side === 'bottom' ? actionButton : null}
+    </div>
+  )
+}
+
+function AlignmentMatrixControl({
+  value,
+  onChange,
+  hasResetConflict = false,
+  armedResetValue = null,
+}: {
+  value: AlignmentMatrixValue | null
+  onChange: (value: AlignmentMatrixValue) => void
+  hasResetConflict?: boolean
+  armedResetValue?: AlignmentResetTarget
+}) {
+  return (
+    <div
+      className={`grid w-fit grid-cols-3 gap-[14px] rounded-xl p-[10px] transition ${
+        hasResetConflict ? 'bg-gray-100/55' : 'bg-gray-100'
+      }`}
+    >
+      {ALIGNMENT_MATRIX_OPTIONS.map((option) => {
+        const isActive = value === option.value
+        const isArmed = armedResetValue === option.value
+        const iconOpacity = hasResetConflict ? (isArmed ? 0.28 : 0.04) : undefined
+
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={`grid h-[14px] w-[14px] place-items-center rounded-sm transition ${
+              hasResetConflict ? 'hover:bg-black/0' : 'hover:bg-black/5'
+            }`}
+            aria-label={option.label}
+            title={option.label}
+            aria-pressed={isActive}
+          >
+            <span
+              aria-hidden="true"
+              className={alignmentIconClass(isActive)}
+              style={{
+                opacity: iconOpacity,
+                justifyItems:
+                  option.horizontal === 'start'
+                    ? 'start'
+                    : option.horizontal === 'center'
+                      ? 'center'
+                      : 'end',
+                alignItems:
+                  option.vertical === 'start'
+                    ? 'start'
+                    : option.vertical === 'center'
+                      ? 'center'
+                      : 'end',
+              }}
+            >
+              <span className="h-1 w-1 rounded-[2px] bg-black" />
+              <span className="h-1 w-1 rounded-[2px] bg-black" />
+              <span className="h-1 w-[11px] rounded-[2px] bg-black" />
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -854,20 +1181,13 @@ function RawClassTextarea({
   )
 }
 
-function PlaceholderBadge() {
-  return (
-    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-zinc-400">
-      Placeholder
-    </span>
-  )
-}
-
-export function StyleEditor({ selectedComponent, components }: StyleEditorProps) {
+export function StyleEditor({ selectedComponent, selectedComponentSize, components }: StyleEditorProps) {
   const [styles, setStyles] = useState<Styles>({})
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState('')
   const [paddingModeOverride, setPaddingModeOverride] = useState<PaddingMode | null>(null)
+  const [gapModeOverride, setGapModeOverride] = useState<GapMode | null>(null)
   const [cornerRadiusModeOverride, setCornerRadiusModeOverride] = useState<CornerRadiusMode | null>(null)
   const [visibleLimitFields, setVisibleLimitFields] = useState<Record<LimitFieldKey, boolean>>({
     'width-min': false,
@@ -893,6 +1213,9 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const [backgroundPickerDraft, setBackgroundPickerDraft] = useState(() =>
     buildBackgroundPickerDraft('#ffffff')
   )
+  const [focusedGapAxis, setFocusedGapAxis] = useState<GapAxis | null>(null)
+  const [isWrapOptionsOpen, setIsWrapOptionsOpen] = useState(false)
+  const [armedAlignmentReset, setArmedAlignmentReset] = useState<AlignmentResetTarget>(null)
   const backgroundPickerRef = useRef<HTMLDivElement | null>(null)
   const [isBorderPickerOpen, setIsBorderPickerOpen] = useState(false)
   const [borderPickerMode, setBorderPickerMode] = useState<BackgroundPickerMode>('hex')
@@ -908,9 +1231,16 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   )
   const selectedFileName = selectedGroup ? componentNameToFileName(selectedGroup.name) : null
   const selectedStyleValue = selectedComponent ? styles[selectedComponent] : undefined
+  const selectedParentName =
+    selectedComponent && selectedGroup?.name !== selectedComponent ? selectedGroup?.name ?? null : null
+  const selectedParentStyleValue = selectedParentName ? styles[selectedParentName] : undefined
   const classTokens = useMemo(
     () => toClassTokens(selectedStyleValue),
     [selectedStyleValue]
+  )
+  const selectedParentClassTokens = useMemo(
+    () => toClassTokens(selectedParentStyleValue),
+    [selectedParentStyleValue]
   )
   const rawCategoryTexts = useMemo(
     () =>
@@ -925,10 +1255,93 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   )
   const widthMode = guessSizeMode(classTokens, 'w')
   const heightMode = guessSizeMode(classTokens, 'h')
+  const fixedWidthPxValue = getFixedSizePxValue(classTokens, 'w')
+  const fixedHeightPxValue = getFixedSizePxValue(classTokens, 'h')
+  const measuredWidthValue = formatMeasuredSizeValue(selectedComponentSize?.width)
+  const measuredHeightValue = formatMeasuredSizeValue(selectedComponentSize?.height)
   const directionMode = guessDirection(classTokens)
   const isFlex = guessToggle(classTokens, 'flex')
+  const wrapMode = guessWrap(classTokens)
+  const flexDirectionOptionGroup =
+    directionMode === 'col' || directionMode === 'col-reverse' ? 'col' : 'row'
+  const canUseAlignContent = isFlex && directionMode !== 'grid' && wrapMode !== 'flex-nowrap'
   const clipsContent = classTokens.includes('overflow-hidden') || classTokens.includes('overflow-clip')
-  const gapClass = findToken(classTokens, /^gap-.+/)
+  const gapClass = findToken(classTokens, /^gap-(?![xy]-).+/)
+  const gapXClass = findToken(classTokens, /^gap-x-.+/)
+  const gapYClass = findToken(classTokens, /^gap-y-.+/)
+  const universalGapValue = getGapValue(gapClass)
+  const gapXValue = getGapValue(gapXClass, 'x') || getGapValue(gapClass)
+  const gapYValue = getGapValue(gapYClass, 'y') || getGapValue(gapClass)
+  const isGapXFallback = !gapXClass && Boolean(gapClass)
+  const isGapYFallback = !gapYClass && Boolean(gapClass)
+  const gapMode = gapModeOverride ?? (gapXClass || gapYClass ? 'axes' : 'universal')
+  const alignmentState = getAlignmentState(classTokens, directionMode, wrapMode)
+  const flexValueClass = findToken(classTokens, /^flex-(1|auto|initial|none)$/)
+  const contentClass = findToken(classTokens, /^content-.+$/)
+  const contentSelectValue = CONTENT_OPTIONS.some((option) => option.value === contentClass)
+    ? contentClass
+    : ''
+  const isContentBaselineActive = contentClass === 'content-baseline'
+  const contentHint =
+    CONTENT_HINTS[
+      (contentSelectValue.replace(/^content-/, '') || 'none') as keyof typeof CONTENT_HINTS
+    ]
+  const selfClass = findToken(classTokens, /^self-.+$/)
+  const growClass = findToken(classTokens, /^(grow|grow-.+)$/)
+  const shrinkClass = findToken(classTokens, /^(shrink|shrink-.+)$/)
+  const orderClass = findToken(classTokens, /^order-.+$/)
+  const basisClass = findToken(classTokens, /^basis-.+$/)
+  const justifyOverrideValue =
+    alignmentState.justify === 'normal' ||
+    alignmentState.justify === 'between' ||
+    alignmentState.justify === 'around' ||
+    alignmentState.justify === 'evenly' ||
+    alignmentState.justify === 'stretch'
+      ? alignmentState.justify
+      : ''
+  const isJustifyBaselineActive = alignmentState.justify === 'baseline'
+  const isJustifyOverrideActive = Boolean(justifyOverrideValue) || isJustifyBaselineActive
+  const isContentOverrideActive = Boolean(contentSelectValue) || isContentBaselineActive
+  const hasAlignmentResetConflict = isJustifyOverrideActive || isContentOverrideActive
+  const isColumnDirectionMode = directionMode === 'col' || directionMode === 'col-reverse'
+  const mainAxisLabel = isColumnDirectionMode ? 'Y Axis' : 'X Axis'
+  const crossAxisLabel = isColumnDirectionMode ? 'X Axis' : 'Y Axis'
+  const selectedParentIsGrid = selectedParentClassTokens.includes('grid')
+  const selectedParentIsFlex = selectedParentClassTokens.includes('flex') && !selectedParentIsGrid
+  const itemLayoutMode = selectedParentIsGrid ? 'grid' : selectedParentIsFlex ? 'flex' : null
+  const selectedParentDirectionMode = selectedParentIsGrid ? 'grid' : guessDirection(selectedParentClassTokens)
+  const isColumnItemParent =
+    selectedParentDirectionMode === 'col' || selectedParentDirectionMode === 'col-reverse'
+  const itemMainAxisLabel = isColumnItemParent ? 'Y Axis' : 'X Axis'
+  const itemCrossAxisLabel = isColumnItemParent ? 'X Axis' : 'Y Axis'
+  const itemAlignSelfAxisLabel = itemLayoutMode === 'grid' ? 'Y Axis' : itemCrossAxisLabel
+  const itemOrderAxisLabel = itemLayoutMode === 'grid' ? 'Placement' : itemMainAxisLabel
+  const mainAxisDistributionLabel = `${mainAxisLabel} Gaps Distribution`
+  const crossAxisDistributionLabel = `${crossAxisLabel} Gaps Distribution`
+  const itemDistributionLabel = `${mainAxisLabel.toLowerCase()} gaps`
+  const wrapDistributionLabel = `${crossAxisLabel.toLowerCase()} gaps`
+  const alignmentResetHint = isContentOverrideActive
+    ? isJustifyOverrideActive
+      ? 'Click again to reset item and wrap distribution.'
+      : `Click again to reset ${wrapDistributionLabel}.`
+    : `Click again to reset ${itemDistributionLabel}.`
+  const justifyHint =
+    JUSTIFY_HINTS[(justifyOverrideValue || 'none') as keyof typeof JUSTIFY_HINTS]
+  const isJustifyDistributionActive =
+    justifyOverrideValue === 'between' ||
+    justifyOverrideValue === 'around' ||
+    justifyOverrideValue === 'evenly'
+  const justifyOverrideAxis: GapAxis = isColumnDirectionMode ? 'y' : 'x'
+  const showGapXAutoSuffix =
+    isJustifyDistributionActive &&
+    focusedGapAxis !== 'x' &&
+    justifyOverrideAxis === 'x' &&
+    Boolean(gapXValue.trim())
+  const showGapYAutoSuffix =
+    isJustifyDistributionActive &&
+    focusedGapAxis !== 'y' &&
+    justifyOverrideAxis === 'y' &&
+    Boolean(gapYValue.trim())
   const backgroundClass = findToken(classTokens, /^bg-(?!clip-padding$).+/)
   const backgroundDetails = parseBackgroundToken(backgroundClass)
   const backgroundPreviewColor = resolveTailwindColorValue(backgroundDetails.colorValue)
@@ -1095,6 +1508,7 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
 
   useEffect(() => {
     setPaddingModeOverride(null)
+    setGapModeOverride(null)
     setCornerRadiusModeOverride(null)
     setVisibleLimitFields({
       'width-min': false,
@@ -1105,6 +1519,8 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     setActiveLimitMenu(null)
     setIsBackgroundPickerOpen(false)
     setIsBorderPickerOpen(false)
+    setIsWrapOptionsOpen(false)
+    setArmedAlignmentReset(null)
   }, [selectedComponent])
 
   useEffect(() => {
@@ -1482,18 +1898,142 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     )
   }
 
-  const handleDirectionChange = (nextDirection: 'row' | 'col' | 'grid') => {
-    let nextTokens = replaceTokens(classTokens, /^(flex-row|flex-col|grid)$/, [])
+  const handleDirectionChange = (nextDirection: 'row' | 'row-reverse' | 'col' | 'col-reverse' | 'grid') => {
+    setArmedAlignmentReset(null)
+
     if (nextDirection === 'grid') {
-      nextTokens = replaceTokens(nextTokens, /^flex$/, ['grid'])
-    } else {
-      nextTokens = replaceTokens(nextTokens, /^grid$/, ['flex', nextDirection === 'col' ? 'flex-col' : 'flex-row'])
+      updateSelectedStyle(
+        classTokens
+          .filter((token) => !/^(flex|flex-row|flex-row-reverse|flex-col|flex-col-reverse|flex-nowrap|flex-wrap|flex-wrap-reverse|grid)$/.test(token))
+          .concat('grid')
+      )
+      return
     }
+
+    const directionToken =
+      nextDirection === 'row'
+        ? 'flex-row'
+        : nextDirection === 'row-reverse'
+          ? 'flex-row-reverse'
+          : nextDirection === 'col'
+            ? 'flex-col'
+            : 'flex-col-reverse'
+    const nextTokens = classTokens.filter(
+      (token) => !/^(flex-row|flex-row-reverse|flex-col|flex-col-reverse|grid)$/.test(token)
+    )
+
+    updateSelectedStyle(nextTokens.includes('flex') ? [...nextTokens, directionToken] : [...nextTokens, 'flex', directionToken])
+  }
+
+  const handleWrapChange = (nextWrap: string) => {
+    setArmedAlignmentReset(null)
+    if (directionMode === 'grid') {
+      updateSelectedStyle(classTokens.filter((token) => !/^flex-(nowrap|wrap|wrap-reverse)$/.test(token)))
+      return
+    }
+
+    const nextTokens = replaceTokens(
+      nextWrap === 'flex-nowrap' ? classTokens.filter((token) => !/^content-.+$/.test(token)) : classTokens,
+      /^flex-(nowrap|wrap|wrap-reverse)$/,
+      nextWrap && nextWrap !== 'flex-nowrap' ? [nextWrap] : []
+    )
     updateSelectedStyle(nextTokens)
   }
 
-  const handleSizeModeChange = (axis: 'w' | 'h', mode: 'Fill' | 'Hug' | 'Fixed') => {
-    const pattern = axis === 'w' ? /^(w-.+|basis-.+|flex-1)$/ : /^h-.+$/
+  const handleGapChange = (axis: GapAxis, nextValue: string) => {
+    const nextToken = buildGapToken(nextValue, axis)
+    updateSelectedStyle(replaceTokens(classTokens, new RegExp(`^gap-${axis}-.+$`), nextToken ? [nextToken] : []))
+  }
+
+  const handleUniversalGapChange = (nextValue: string) => {
+    const nextToken = buildGapToken(nextValue)
+    updateSelectedStyle(replaceTokens(classTokens, /^gap(?:-[xy])?-.+$/, nextToken ? [nextToken] : []))
+  }
+
+  const handleGapModeChange = (nextMode: GapMode) => {
+    if (nextMode === gapMode) return
+    setGapModeOverride(nextMode)
+  }
+
+  const handleAlignmentMatrixChange = (nextValue: AlignmentMatrixValue) => {
+    if (hasAlignmentResetConflict && armedAlignmentReset !== nextValue) {
+      setArmedAlignmentReset(nextValue)
+      return
+    }
+
+    setArmedAlignmentReset(null)
+    const shouldResetJustify = hasAlignmentResetConflict && isJustifyOverrideActive
+    const shouldResetContent = hasAlignmentResetConflict && isContentOverrideActive
+    const nextTokens = classTokens.filter(
+      (token) =>
+        !(
+          shouldResetJustify
+            ? /^justify-(start|center|end|between|around|evenly|baseline|normal|stretch)$/.test(token)
+            : /^justify-(start|center|end)$/.test(token)
+        ) &&
+        !/^items-(start|center|end)$/.test(token) &&
+        !(shouldResetContent ? /^content-.+$/.test(token) : /^content-(start|center|end)$/.test(token))
+    )
+
+    if (alignmentState.matrixValue === nextValue && !hasAlignmentResetConflict) {
+      updateSelectedStyle(nextTokens)
+      return
+    }
+
+    const [vertical, horizontal] = nextValue.split('-') as ['top' | 'middle' | 'bottom', 'left' | 'middle' | 'right']
+    const horizontalToken =
+      horizontal === 'left' ? 'start' : horizontal === 'middle' ? 'center' : 'end'
+    const verticalToken = vertical === 'top' ? 'start' : vertical === 'middle' ? 'center' : 'end'
+
+    const alignmentTokens = visualToAlignmentTokens({
+      horizontal: horizontalToken,
+      vertical: verticalToken,
+      direction: directionMode,
+      wrap: wrapMode,
+    })
+    const itemsToken = `items-${alignmentTokens.items}`
+    const justifyToken = `justify-${alignmentTokens.justify}`
+    const contentToken = `content-${alignmentTokens.content}`
+
+    updateSelectedStyle([...nextTokens, justifyToken, itemsToken, contentToken])
+  }
+
+  const handleJustifyChange = (nextValue: string) => {
+    setArmedAlignmentReset(null)
+    updateSelectedStyle(
+      replaceTokens(
+        classTokens,
+        /^justify-(start|center|end|between|around|evenly|baseline|normal|stretch)$/,
+        nextValue ? [nextValue] : []
+      )
+    )
+  }
+
+  const handleJustifyBaselineToggle = () => {
+    setArmedAlignmentReset(null)
+    updateSelectedStyle(
+      replaceTokens(
+        classTokens,
+        /^justify-(start|center|end|between|around|evenly|baseline|normal|stretch)$/,
+        isJustifyBaselineActive ? [] : ['justify-baseline']
+      )
+    )
+  }
+
+  const handleContentBaselineToggle = () => {
+    setArmedAlignmentReset(null)
+    updateSelectedStyle(
+      replaceTokens(classTokens, /^content-.+$/, isContentBaselineActive ? [] : ['content-baseline'])
+    )
+  }
+
+  const handleAdvancedFlexTokenChange = (pattern: RegExp, nextValue: string) => {
+    setArmedAlignmentReset(null)
+    updateSelectedStyle(replaceTokens(classTokens, pattern, nextValue.trim() ? [nextValue.trim()] : []))
+  }
+
+  const handleSizeModeChange = (axis: SizeAxis, mode: SizeMode) => {
+    const pattern = sizeTokenPattern(axis)
     let nextValue = ''
 
     if (mode === 'Fill') {
@@ -1503,6 +2043,14 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     }
 
     updateSingleField(pattern, nextValue)
+  }
+
+  const handleFixedSizeValueChange = (axis: SizeAxis, value: string) => {
+    const normalizedValue = normalizeFixedSizePxValue(value)
+    updateSingleField(
+      sizeTokenPattern(axis),
+      normalizedValue ? `${axis}-[${normalizedValue}]` : ''
+    )
   }
 
   const showLimitField = (axis: LimitAxis, kind: LimitKind) => {
@@ -1669,6 +2217,17 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
     return replaceTokens(classTokens, /^(px|py|pl|pr|pt|pb)-.+$/, nextPaddingTokens)
   }
 
+  const normalizeGapTokensForSave = (tokens: string[]) => {
+    const hasExplicitGapX = tokens.some((token) => /^gap-x-.+$/.test(token))
+    const hasExplicitGapY = tokens.some((token) => /^gap-y-.+$/.test(token))
+
+    if (hasExplicitGapX && hasExplicitGapY) {
+      return tokens.filter((token) => !/^gap-(?![xy]-).+$/.test(token))
+    }
+
+    return tokens
+  }
+
   const normalizeCornerRadiusTokensForSave = (tokens: string[]) => {
     if (cornerRadiusMode === 'linked') {
       return replaceTokens(
@@ -1693,7 +2252,9 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
   const handleSave = async () => {
     if (!selectedFileName || !selectedComponent) return
 
-    const nextTokens = normalizeCornerRadiusTokensForSave(normalizePaddingTokensForSave())
+    const nextTokens = normalizeCornerRadiusTokensForSave(
+      normalizeGapTokensForSave(normalizePaddingTokensForSave())
+    )
 
     setIsSaving(true)
     setSaveMessage('')
@@ -1761,35 +2322,25 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <label className="space-y-1">
-                  <span className={tinyLabelClass()}>Width</span>
-                  <div className={fieldShellClass()}>
-                    <select
-                      value={widthMode}
-                      onChange={(event) => handleSizeModeChange('w', event.target.value as 'Fill' | 'Hug' | 'Fixed')}
-                      className="w-full bg-transparent outline-none"
-                    >
-                      <option value="Fill">{sizeModeLabel('Fill', 'w')}</option>
-                      <option value="Hug">{sizeModeLabel('Hug', 'w')}</option>
-                      <option value="Fixed">{sizeModeLabel('Fixed', 'w')}</option>
-                    </select>
-                  </div>
-                </label>
+                <SizeModeCombobox
+                  label="Width"
+                  axis="w"
+                  mode={widthMode}
+                  fixedValue={fixedWidthPxValue}
+                  fixedPlaceholder={measuredWidthValue}
+                  onModeChange={handleSizeModeChange}
+                  onFixedValueChange={handleFixedSizeValueChange}
+                />
 
-                <label className="space-y-1">
-                  <span className={tinyLabelClass()}>Height</span>
-                  <div className={fieldShellClass()}>
-                    <select
-                      value={heightMode}
-                      onChange={(event) => handleSizeModeChange('h', event.target.value as 'Fill' | 'Hug' | 'Fixed')}
-                      className="w-full bg-transparent outline-none"
-                    >
-                      <option value="Fill">{sizeModeLabel('Fill', 'h')}</option>
-                      <option value="Hug">{sizeModeLabel('Hug', 'h')}</option>
-                      <option value="Fixed">{sizeModeLabel('Fixed', 'h')}</option>
-                    </select>
-                  </div>
-                </label>
+                <SizeModeCombobox
+                  label="Height"
+                  axis="h"
+                  mode={heightMode}
+                  fixedValue={fixedHeightPxValue}
+                  fixedPlaceholder={measuredHeightValue}
+                  onModeChange={handleSizeModeChange}
+                  onFixedValueChange={handleFixedSizeValueChange}
+                />
               </div>
             </>
           )}
@@ -1798,58 +2349,505 @@ export function StyleEditor({ selectedComponent, components }: StyleEditorProps)
         {selectedComponent && (
           <>
             <section className="space-y-4 border-b border-zinc-200 pb-5">
-              <div className="flex items-center gap-3 pt-1">
-                <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">
-                  Flex Direction / Grid
+              <div className="space-y-0.5 pt-1">
+                <p className="text-base font-bold tracking-[-0.02em] text-black">
+                  Flex/Grid
                 </p>
-                <PlaceholderBadge />
               </div>
-
-              <div className="grid grid-cols-3 gap-1">
-                {DIRECTION_OPTIONS.map((option) => {
-                  const isActive = directionMode === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => handleDirectionChange(option.value)}
-                      className={`flex h-8 items-center justify-center rounded-lg text-sm font-semibold transition ${
-                        isActive ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
-                      }`}
-                    >
-                      {option.icon}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <label className="block space-y-1">
-                <div className="space-y-0.5">
-                  <span className={tinyLabelClass()}>Gap</span>
-                  <p className={tinyHintClass()}>Tailwind spacing tokens or px</p>
-                </div>
-                <input
-                  value={gapClass}
-                  onChange={(event) => updateSingleField(/^gap-.+$/, event.target.value)}
-                  className="h-6 w-[79px] rounded-lg bg-gray-100 px-3 text-[12px] font-medium text-black outline-none"
-                  placeholder="gap-4"
-                />
-              </label>
 
               <div className="space-y-1">
-                <span className={tinyLabelClass()}>Alignment</span>
-                <div className="grid w-fit grid-cols-3 gap-3 rounded-xl bg-gray-100 p-3">
-                  {Array.from({ length: 9 }, (_, index) => (
-                    <div
-                      key={index}
-                      className={`h-3 w-3 rounded-sm border border-black/10 ${
-                        index === 3 ? 'bg-black' : 'bg-black/10'
-                      }`}
-                    />
-                  ))}
+                <span className={tinyLabelClass()}>Layout Axis</span>
+                <div className="grid grid-cols-3 gap-1">
+                  {DIRECTION_OPTIONS.map((option) => {
+                    const isActive =
+                      option.value === 'grid'
+                        ? directionMode === 'grid'
+                        : option.value === 'row'
+                          ? directionMode === 'row' || directionMode === 'row-reverse'
+                          : directionMode === 'col' || directionMode === 'col-reverse'
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => handleDirectionChange(option.value)}
+                        className={`flex h-[21px] items-center justify-center rounded-lg py-4 transition ${
+                          isActive ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
+                        }`}
+                        aria-label={option.label}
+                        title={option.label}
+                      >
+                        <FlexTypeIcon type={option.value} />
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
+
+              {directionMode !== 'grid' && (
+                <div className="space-y-1">
+                  <span className={tinyLabelClass()}>Direction</span>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
+                    {[
+                      {
+                        label: flexDirectionOptionGroup === 'col' ? 'Normal ↓' : 'Normal →',
+                        value: flexDirectionOptionGroup === 'col' ? 'col' : 'row',
+                      },
+                      {
+                        label: flexDirectionOptionGroup === 'col' ? 'Reverse ↑' : 'Reverse ←',
+                        value: flexDirectionOptionGroup === 'col' ? 'col-reverse' : 'row-reverse',
+                      },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() =>
+                          handleDirectionChange(
+                            option.value as 'row' | 'row-reverse' | 'col' | 'col-reverse'
+                          )
+                        }
+                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
+                          directionMode === option.value ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="relative space-y-1">
+                <div className="space-y-0.5">
+                  <span className={tinyLabelClass()}>Wrap?</span>
+                </div>
+                <div className="flex gap-1">
+                  <div className={`${fieldShellClass()} flex-1`}>
+                    <select
+                      value={directionMode === 'grid' ? '' : wrapMode}
+                      onChange={(event) => handleWrapChange(event.target.value)}
+                      disabled={directionMode === 'grid'}
+                      className={`${fieldSelectClass()} disabled:cursor-not-allowed disabled:text-black/30`}
+                      aria-label="Wrap mode"
+                    >
+                      {directionMode === 'grid' ? (
+                        <option value="">Grid does not use flex wrap</option>
+                      ) : (
+                        WRAP_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsWrapOptionsOpen((prev) => !prev)}
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[12px] font-bold transition ${
+                      isWrapOptionsOpen
+                        ? 'bg-black text-white shadow-sm'
+                        : 'bg-gray-100 text-black/60 hover:text-black'
+                    }`}
+                    aria-expanded={isWrapOptionsOpen}
+                    aria-label="Open wrap options"
+                    title="Open wrap options"
+                  >
+                    ...
+                  </button>
+                </div>
+                <p className={tinyHintClass()}>
+                  {directionMode === 'grid' ? 'Grid layout does not use flex wrap' : 'Choose how items wrap'}
+                </p>
+                {isWrapOptionsOpen && (
+                  <div className="absolute left-0 right-0 top-full z-20 mt-2 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => setIsWrapOptionsOpen(false)}
+                      className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[12px] font-bold leading-none text-black/55 transition hover:bg-black hover:text-white"
+                      aria-label="Close wrap options"
+                      title="Close wrap options"
+                    >
+                      x
+                    </button>
+                    {canUseAlignContent ? (
+                      <label className="flex items-start gap-2 rounded-lg bg-gray-100 px-2 py-1.5">
+                          <input
+                            type="checkbox"
+                            checked={isContentBaselineActive}
+                            onChange={handleContentBaselineToggle}
+                            className="mt-0.5 h-3.5 w-3.5 accent-black"
+                            aria-label="Use content-baseline"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className={`${tinyLabelClass()} block`}>content-baseline</span>
+                            <span className={`${tinyHintClass()} block`}>
+                              Aligns wrapped lines by their text baselines when supported.
+                            </span>
+                          </span>
+                        </label>
+                    ) : (
+                      <p className={`${tinyHintClass()} pr-6`}>
+                        Wrap axis options appear when flex-wrap or flex-wrap-reverse is selected.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1 space-y-1 transition">
+                  <div className="space-y-0.5">
+                    <span className={tinyLabelClass()}>Alignment</span>
+                  </div>
+                  <AlignmentMatrixControl
+                    value={alignmentState.matrixValue as AlignmentMatrixValue | null}
+                    onChange={handleAlignmentMatrixChange}
+                    hasResetConflict={hasAlignmentResetConflict}
+                    armedResetValue={armedAlignmentReset}
+                  />
+                  <p className={tinyHintClass()}>
+                    {armedAlignmentReset
+                      ? alignmentResetHint
+                      : hasAlignmentResetConflict
+                        ? 'Click a muted point to prepare a distribution reset.'
+                        : 'Position items on both axes'}
+                  </p>
+                </div>
+
+                <div className="block min-w-0 flex-1 space-y-3">
+                  <label className="block space-y-1">
+                    <div className="space-y-0.5">
+                      <span className={tinyLabelClass()}>{mainAxisDistributionLabel}</span>
+                    </div>
+                    <div className={fieldShellClass()}>
+                      <select
+                        value={justifyOverrideValue ? `justify-${justifyOverrideValue}` : ''}
+                        onChange={(event) => handleJustifyChange(event.target.value)}
+                        className={`${fieldSelectClass()} ${justifyOverrideValue ? 'opacity-100' : 'opacity-40'}`}
+                        aria-label="Justify content"
+                      >
+                        {JUSTIFY_OPTIONS.map((option) => (
+                          <option key={option.label} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className={tinyHintClass()}>{justifyHint}</p>
+                  </label>
+
+                  {canUseAlignContent && (
+                    <label className="block space-y-1">
+                      <span className={tinyLabelClass()}>{crossAxisDistributionLabel}</span>
+                      <div className={fieldShellClass()}>
+                        <select
+                          value={contentSelectValue}
+                          onChange={(event) =>
+                            handleAdvancedFlexTokenChange(/^content-.+$/, event.target.value)
+                          }
+                          className={`${fieldSelectClass()} ${
+                            contentSelectValue ? 'opacity-100' : 'opacity-40'
+                          }`}
+                          aria-label="Align content"
+                        >
+                          {CONTENT_OPTIONS.map((option) => (
+                            <option key={option.label} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <p className={tinyHintClass()}>{contentHint}</p>
+                    </label>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className={tinyLabelClass()}>Gap</span>
+                    <p className={tinyHintClass()}>Spacing token or px</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
+                    {(['universal', 'axes'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => handleGapModeChange(mode)}
+                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
+                          gapMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
+                        }`}
+                      >
+                        {mode === 'universal' ? 'Combined' : 'Axes'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {gapMode === 'universal' ? (
+	                  <label className="block min-w-0 flex-1 space-y-1">
+	                    <div className="space-y-0.5">
+	                      <span className={tinyLabelClass()}>All axes</span>
+	                    </div>
+                    <div className="flex h-6 items-center gap-2 rounded-lg bg-gray-100 px-3">
+                      <input
+                        value={universalGapValue}
+                        onChange={(event) => handleUniversalGapChange(event.target.value)}
+                        className="min-w-0 flex-1 bg-transparent text-[12px] font-medium text-black outline-none placeholder:text-black/40"
+                        placeholder="none"
+                        aria-label="Combined gap"
+                      />
+                    </div>
+                  </label>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block min-w-0 flex-1 space-y-1">
+                      <div className="space-y-0.5">
+                        <span className={tinyLabelClass()}>x-axis</span>
+                      </div>
+                      <div className="flex h-6 items-center gap-2 rounded-lg bg-gray-100 px-3">
+                        <input
+                          value={gapXValue}
+                          onChange={(event) => handleGapChange('x', event.target.value)}
+                          onFocus={(event) => {
+                            setFocusedGapAxis('x')
+                            if (isGapXFallback) {
+                              event.currentTarget.select()
+                            }
+                          }}
+                          onBlur={() => setFocusedGapAxis(null)}
+                          className={`min-w-0 flex-1 bg-transparent text-[12px] font-medium outline-none ${
+                            isGapXFallback ? 'text-black/40' : 'text-black'
+                          }`}
+                          placeholder="none"
+                          aria-label="Gap x-axis"
+                        />
+                        {showGapXAutoSuffix && (
+                          <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-black/35">
+                            {' + auto'}
+                          </span>
+                        )}
+                        <GapAxisIcon axis="x" />
+                      </div>
+                    </label>
+
+                    <label className="block min-w-0 flex-1 space-y-1">
+                      <div className="space-y-0.5">
+                        <span className={tinyLabelClass()}>y-axis</span>
+                      </div>
+                      <div className="flex h-6 items-center gap-2 rounded-lg bg-gray-100 px-3">
+                        <input
+                          value={gapYValue}
+                          onChange={(event) => handleGapChange('y', event.target.value)}
+                          onFocus={(event) => {
+                            setFocusedGapAxis('y')
+                            if (isGapYFallback) {
+                              event.currentTarget.select()
+                            }
+                          }}
+                          onBlur={() => setFocusedGapAxis(null)}
+                          className={`min-w-0 flex-1 bg-transparent text-[12px] font-medium outline-none ${
+                            isGapYFallback ? 'text-black/40' : 'text-black'
+                          }`}
+                          placeholder="none"
+                          aria-label="Gap y-axis"
+                        />
+                        {showGapYAutoSuffix && (
+                          <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-black/35">
+                            {' + auto'}
+                          </span>
+                        )}
+                        <GapAxisIcon axis="y" />
+                      </div>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              <details open className="rounded-2xl border border-zinc-200 bg-white p-3">
+                <summary className="cursor-pointer list-none text-base font-bold tracking-[-0.02em] text-black">
+                  Advanced flex options
+                </summary>
+                <div className="mt-3 space-y-4">
+                  <div className="space-y-3">
+                    <p className={tinyLabelClass()}>Parent container</p>
+                    <div className="grid grid-cols-1 gap-3">
+                      <label className="block space-y-1">
+                        <span className={tinyLabelClass()}>Flex direction</span>
+                        <div className={fieldShellClass()}>
+                          <select
+                            value={directionMode === 'grid' ? '' : directionMode}
+                            onChange={(event) =>
+                              handleDirectionChange(
+                                event.target.value as 'row' | 'row-reverse' | 'col' | 'col-reverse'
+                              )
+                            }
+                            disabled={directionMode === 'grid'}
+                            className={`${fieldSelectClass()} disabled:cursor-not-allowed disabled:opacity-40`}
+                            aria-label="Flex direction"
+                          >
+                            {directionMode === 'grid' ? (
+                              <option value="">Grid does not use flex direction</option>
+                            ) : (
+                              FLEX_DIRECTION_OPTIONS.filter(
+                                (option) => option.group === flexDirectionOptionGroup
+                              ).map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </div>
+                      </label>
+                    </div>
+
+                    <label className="flex items-start gap-2 rounded-lg bg-gray-100 px-2 py-1.5">
+                      <input
+                        type="checkbox"
+                        checked={isJustifyBaselineActive}
+                        onChange={handleJustifyBaselineToggle}
+                        className="mt-0.5 h-3.5 w-3.5 accent-black"
+                        aria-label="Use justify-baseline"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className={`${tinyLabelClass()} block`}>justify-baseline</span>
+                        <span className={`${tinyHintClass()} block`}>
+                          Aligns content using its text baseline when supported.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+
+                </div>
+              </details>
             </section>
+
+            {itemLayoutMode && (
+              <section className="space-y-4 border-b border-zinc-200 pb-5">
+                <div className="space-y-0.5 pt-1">
+                  <p className="text-base font-bold tracking-[-0.02em] text-black">
+                    Flex/Grid Item
+                  </p>
+                  <p className={tinyHintClass()}>
+                    How this element behaves inside {selectedParentName}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {itemLayoutMode === 'flex' && (
+                    <>
+                      <label className="block space-y-1">
+                        <span className={tinyLabelClass()}>Flex · {itemMainAxisLabel}</span>
+                        <div className={fieldShellClass()}>
+                          <select
+                            value={flexValueClass}
+                            onChange={(event) =>
+                              handleAdvancedFlexTokenChange(/^flex-(1|auto|initial|none)$/, event.target.value)
+                            }
+                            className={`${fieldSelectClass()} ${flexValueClass ? 'opacity-100' : 'opacity-40'}`}
+                            aria-label="Flex value"
+                          >
+                            {FLEX_VALUE_OPTIONS.map((option) => (
+                              <option key={option.label} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </label>
+
+                      <label className="block space-y-1">
+                        <span className={tinyLabelClass()}>Grow · {itemMainAxisLabel}</span>
+                        <div className={fieldShellClass()}>
+                          <select
+                            value={growClass}
+                            onChange={(event) =>
+                              handleAdvancedFlexTokenChange(/^(grow|grow-.+)$/, event.target.value)
+                            }
+                            className={`${fieldSelectClass()} ${growClass ? 'opacity-100' : 'opacity-40'}`}
+                            aria-label="Grow"
+                          >
+                            {GROW_OPTIONS.map((option) => (
+                              <option key={option.label} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </label>
+
+                      <label className="block space-y-1">
+                        <span className={tinyLabelClass()}>Shrink · {itemMainAxisLabel}</span>
+                        <div className={fieldShellClass()}>
+                          <select
+                            value={shrinkClass}
+                            onChange={(event) =>
+                              handleAdvancedFlexTokenChange(/^(shrink|shrink-.+)$/, event.target.value)
+                            }
+                            className={`${fieldSelectClass()} ${shrinkClass ? 'opacity-100' : 'opacity-40'}`}
+                            aria-label="Shrink"
+                          >
+                            {SHRINK_OPTIONS.map((option) => (
+                              <option key={option.label} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </label>
+
+                      <label className="block space-y-1">
+                        <span className={tinyLabelClass()}>Basis · {itemMainAxisLabel}</span>
+                        <input
+                          value={basisClass}
+                          onChange={(event) =>
+                            handleAdvancedFlexTokenChange(/^basis-.+$/, event.target.value)
+                          }
+                          className={advancedFieldInputClass(Boolean(basisClass))}
+                          placeholder="none"
+                          aria-label="Basis"
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  <label className="block space-y-1">
+                    <span className={tinyLabelClass()}>Align self · {itemAlignSelfAxisLabel}</span>
+                    <div className={fieldShellClass()}>
+                      <select
+                        value={selfClass}
+                        onChange={(event) =>
+                          handleAdvancedFlexTokenChange(/^self-.+$/, event.target.value)
+                        }
+                        className={`${fieldSelectClass()} ${selfClass ? 'opacity-100' : 'opacity-40'}`}
+                        aria-label="Align self"
+                      >
+                        {SELF_OPTIONS.map((option) => (
+                          <option key={option.label} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </label>
+
+                  <label className="block space-y-1">
+                    <span className={tinyLabelClass()}>Order · {itemOrderAxisLabel}</span>
+                    <input
+                      value={orderClass}
+                      onChange={(event) =>
+                        handleAdvancedFlexTokenChange(/^order-.+$/, event.target.value)
+                      }
+                      className={advancedFieldInputClass(Boolean(orderClass))}
+                      placeholder="none"
+                      aria-label="Order"
+                    />
+                  </label>
+                </div>
+              </section>
+            )}
 
             <section className="space-y-5 border-b border-zinc-200 pb-5">
               <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Padding</p>

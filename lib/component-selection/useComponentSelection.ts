@@ -5,6 +5,11 @@ type UseComponentSelectionOptions = {
   componentHierarchy: ComponentGroup[]
 }
 
+export type SelectedComponentSize = {
+  width: number
+  height: number
+}
+
 const componentNameToSlot = (name: string) => {
   const generatedMatch = name.match(/^Div(\d{3})(.*)$/)
   if (generatedMatch) {
@@ -70,8 +75,20 @@ function syncSelectionAttributes(
   })
 }
 
+function measureSelectedElementSize(elements: Element[]): SelectedComponentSize | null {
+  const selectedElement = elements[0]
+  if (!(selectedElement instanceof HTMLElement)) return null
+
+  const rect = selectedElement.getBoundingClientRect()
+  return {
+    width: rect.width,
+    height: rect.height,
+  }
+}
+
 export function useComponentSelection({ componentHierarchy }: UseComponentSelectionOptions) {
   const [selectedComponent, setSelectedComponent] = useState<string | null>(null)
+  const [selectedComponentSize, setSelectedComponentSize] = useState<SelectedComponentSize | null>(null)
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const selectedComponentRef = useRef<string | null>(null)
   const selectedElementsRef = useRef<Element[]>([])
@@ -154,6 +171,24 @@ export function useComponentSelection({ componentHierarchy }: UseComponentSelect
     const nextSelectedElements = getSelectedElements(root, selectedComponent)
     syncSelectionAttributes(selectedElementsRef.current, nextSelectedElements)
     selectedElementsRef.current = nextSelectedElements
+    setSelectedComponentSize(measureSelectedElementSize(nextSelectedElements))
+  }, [selectedComponent])
+
+  useEffect(() => {
+    if (!selectedComponent) return
+
+    const selectedElements = selectedElementsRef.current
+    const observer = new ResizeObserver(() => {
+      setSelectedComponentSize(measureSelectedElementSize(selectedElementsRef.current))
+    })
+
+    selectedElements.forEach((element) => {
+      if (element instanceof HTMLElement) {
+        observer.observe(element)
+      }
+    })
+
+    return () => observer.disconnect()
   }, [selectedComponent])
 
   useEffect(() => {
@@ -169,6 +204,7 @@ export function useComponentSelection({ componentHierarchy }: UseComponentSelect
         const nextSelectedElements = getSelectedElements(root, selectedComponentRef.current)
         syncSelectionAttributes(selectedElementsRef.current, nextSelectedElements)
         selectedElementsRef.current = nextSelectedElements
+        setSelectedComponentSize(measureSelectedElementSize(nextSelectedElements))
       })
     })
 
@@ -190,6 +226,7 @@ export function useComponentSelection({ componentHierarchy }: UseComponentSelect
 
   return {
     selectedComponent,
+    selectedComponentSize,
     setSelectedComponent,
     canvasRef,
     navigateDown,

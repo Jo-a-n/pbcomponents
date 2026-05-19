@@ -2,10 +2,13 @@ import test, { describe } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildGapToken,
   componentTitle,
   formatAxisValue,
   fromClassTokens,
+  getAlignmentState,
   getBreadcrumb,
+  getGapValue,
   getCategoryText,
   getLimitTokenValue,
   getPaddingTokensForAxis,
@@ -16,6 +19,7 @@ import {
   guessDirection,
   guessPaddingMode,
   guessSizeMode,
+  guessWrap,
   normalizeLimitValue,
   normalizePaddingValue,
   parseComparableLengthValue,
@@ -24,6 +28,7 @@ import {
   sizeModeLabel,
   toClassTokens,
   tokenMatchesCategory,
+  visualToAlignmentTokens,
 } from '../../lib/style-editor/style-editor-helpers.mjs'
 
 const COMPONENTS = [
@@ -70,6 +75,11 @@ describe('style editor grouping helpers', () => {
     assert.equal(tokenMatchesCategory('px-4', 'padding'), true)
     assert.equal(tokenMatchesCategory('relative', 'other'), true)
     assert.equal(tokenMatchesCategory('text-sm', 'other'), false)
+    assert.equal(tokenMatchesCategory('flex-row-reverse', 'flex'), true)
+    assert.equal(tokenMatchesCategory('flex-col-reverse', 'flex'), true)
+    assert.equal(tokenMatchesCategory('flex-wrap-reverse', 'flex'), true)
+    assert.equal(tokenMatchesCategory('basis-1/2', 'flex'), true)
+    assert.equal(tokenMatchesCategory('basis-1/2', 'limits'), false)
 
     assert.equal(getCategoryText(tokens, 'padding'), 'px-4')
     assert.equal(getCategoryText(tokens, 'background'), 'bg-white')
@@ -132,8 +142,89 @@ describe('style editor value normalization helpers', () => {
     assert.equal(getTokenValue('px-4', 'px'), '4')
 
     assert.equal(guessDirection(['flex', 'flex-col']), 'col')
+    assert.equal(guessDirection(['flex', 'flex-row-reverse']), 'row-reverse')
+    assert.equal(guessDirection(['flex', 'flex-col-reverse']), 'col-reverse')
     assert.equal(guessDirection(['grid']), 'grid')
     assert.equal(guessDirection(['flex']), 'row')
+    assert.equal(guessWrap(['flex', 'flex-wrap-reverse']), 'flex-wrap-reverse')
+    assert.equal(guessWrap(['flex']), 'flex-nowrap')
+    assert.equal(getGapValue('gap-[12px]'), '12px')
+    assert.equal(getGapValue('gap-4'), '4')
+    assert.equal(getGapValue('gap-y-[20px]', 'y'), '20px')
+    assert.equal(buildGapToken('12px'), 'gap-[12px]')
+    assert.equal(buildGapToken('20px', 'y'), 'gap-y-[20px]')
+    assert.equal(buildGapToken('gap-6'), 'gap-6')
+    assert.deepEqual(getAlignmentState(['flex', 'justify-center', 'items-end'], 'row'), {
+      justify: 'center',
+      items: 'end',
+      matrixValue: 'bottom-middle',
+    })
+    assert.deepEqual(getAlignmentState(['flex', 'flex-col', 'justify-end', 'items-start'], 'col'), {
+      justify: 'end',
+      items: 'start',
+      matrixValue: 'bottom-left',
+    })
+    assert.deepEqual(getAlignmentState(['flex', 'justify-between'], 'row'), {
+      justify: 'between',
+      items: '',
+      matrixValue: null,
+    })
+    assert.deepEqual(getAlignmentState(['flex', 'justify-baseline'], 'row'), {
+      justify: 'baseline',
+      items: '',
+      matrixValue: null,
+    })
+    assert.deepEqual(getAlignmentState(['flex', 'justify-stretch'], 'row'), {
+      justify: 'stretch',
+      items: '',
+      matrixValue: null,
+    })
+    assert.deepEqual(
+      getAlignmentState(['flex', 'flex-row-reverse', 'justify-end', 'items-start'], 'row-reverse'),
+      {
+        justify: 'end',
+        items: 'start',
+        matrixValue: 'top-left',
+      }
+    )
+    assert.deepEqual(
+      getAlignmentState(
+        ['flex', 'flex-wrap-reverse', 'justify-start', 'items-end'],
+        'row',
+        'flex-wrap-reverse'
+      ),
+      {
+        justify: 'start',
+        items: 'end',
+        matrixValue: 'top-left',
+      }
+    )
+    assert.deepEqual(
+      visualToAlignmentTokens({
+        horizontal: 'start',
+        vertical: 'start',
+        direction: 'row-reverse',
+        wrap: 'flex-nowrap',
+      }),
+      {
+        justify: 'end',
+        items: 'start',
+        content: 'start',
+      }
+    )
+    assert.deepEqual(
+      visualToAlignmentTokens({
+        horizontal: 'start',
+        vertical: 'start',
+        direction: 'row',
+        wrap: 'flex-wrap-reverse',
+      }),
+      {
+        justify: 'start',
+        items: 'end',
+        content: 'end',
+      }
+    )
 
     assert.equal(guessSizeMode(['w-full'], 'w'), 'Fill')
     assert.equal(guessSizeMode(['w-fit'], 'w'), 'Hug')
