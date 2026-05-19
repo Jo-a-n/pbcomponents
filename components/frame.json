@@ -1,17 +1,34 @@
 {
   "Frame": [
-    "size-full border-1 bg-none rounded-none pt-none pr-none pb-none pl-none",
-    "flex flex-row gap-4 flex-nowrap"
+    "px-2 py-4",
+    "size-full w-[320px] h-[400px] rounded-xl",
+    "gap-x-4 gap-y-5 items-center flex flex-row justify-around",
+    "bg-none",
+    "border-yellow-300 border-2"
   ],
   "FrameTitle": [
-    "border-none bg-red-50 rounded-none pt-none pr-none pb-none pl-none",
-    "flex basis-full justify-items-end items-center",
-    "text-start"
+    "pt-none pr-none pb-none pl-none",
+    "w-fit max-w-[200px] h-fit rounded-none",
+    "flex justify-items-end items-center gap-0 self-center flex-1",
+    "text-start",
+    "bg-red-50",
+    "border-2"
   ],
   "//comment": "flex-none and basis fight each other",
   "FrameAction": [
-    "border-none bg-red-50 rounded-none pt-none pr-none pb-none pl-none",
-    "flex basis-full justify-items-center items-center",
-    "text-start"
+    "pt-none pr-none pb-none pl-none",
+    "h-fit w-fit rounded-none",
+    "justify-items-center items-center flex-initial self-end",
+    "text-start",
+    "bg-red-50",
+    "border-0"
+  ],
+  "FrameAction2": [
+    "px-6 py-6",
+    "w-fit rounded-none",
+    "flex justify-items-center items-center flex-row flex-none self-start",
+    "text-start",
+    "bg-red-50",
+    "border-2 border-neutral-800"
   ]
 }

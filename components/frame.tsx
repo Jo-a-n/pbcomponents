@@ -38,8 +38,19 @@ function FrameAction({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+function FrameAction2({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="frame-action2"
+      className={cn(pb.FrameAction2, className)}
+      {...props}
+    />
+  )
+}
+
 export {
   Frame,
   FrameTitle,
   FrameAction,
+  FrameAction2,
 }

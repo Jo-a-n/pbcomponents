@@ -18,7 +18,8 @@ export const componentHierarchy: ComponentGroup[] = [
     "name": "Frame",
     "children": [
       "FrameTitle",
-      "FrameAction"
+      "FrameAction",
+      "FrameAction2"
     ]
   }
 ]
