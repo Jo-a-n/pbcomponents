@@ -122,6 +122,7 @@ export function LibraryWorkspace({ components, children }: LibraryWorkspaceProps
         selectedComponent={selectedComponent}
         selectedComponentSize={selectedComponentSize}
         components={components}
+        previewRootRef={canvasRef}
       />
     </div>
   )

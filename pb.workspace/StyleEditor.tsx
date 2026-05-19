@@ -1,9 +1,13 @@
 'use client'
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import type { ComponentGroup } from '@/lib/component-selection/types'
 import { componentNameToFileName } from '@/pb.workspace/componentNameToFileName'
-import type { SelectedComponentSize } from '@/lib/component-selection/useComponentSelection'
+import {
+  componentNameToSlot,
+  type SelectedComponentSize,
+} from '@/lib/component-selection/useComponentSelection'
 import {
   buildBackgroundPickerDraft,
   buildBackgroundPickerDraftFromHsl,
@@ -69,6 +73,7 @@ import {
 
 type StyleValue = string | string[]
 type Styles = Record<string, StyleValue>
+type StylesByFile = Record<string, Styles>
 type PaddingMode = 'axes' | 'sides'
 type PaddingAxis = 'x' | 'y'
 type PaddingMarker = 'pl' | 'pr' | 'pt' | 'pb'
@@ -106,10 +111,56 @@ type RawEditorCategory =
   | 'effects'
   | 'other'
 
+const PREVIEW_BASE_CLASS_ATTR = 'data-pb-preview-base-class'
+
+function styleValueSignature(value: StyleValue | undefined) {
+  return toClassTokens(value).join(' ')
+}
+
+function mergePreviewClassNames(previewValue: StyleValue | undefined, savedValue: StyleValue | undefined, baseClassName: string) {
+  const savedTokens = new Set(toClassTokens(savedValue))
+  const previewTokens = toClassTokens(previewValue)
+  const extraTokens = tokenizeClassInput(baseClassName).filter((token) => !savedTokens.has(token))
+
+  return Array.from(new Set([...previewTokens, ...extraTokens])).join(' ')
+}
+
+function hasStyleChanges(styles: Styles, savedStyles: Styles) {
+  const keys = new Set([...Object.keys(styles), ...Object.keys(savedStyles)])
+
+  for (const key of keys) {
+    if (styleValueSignature(styles[key]) !== styleValueSignature(savedStyles[key])) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function hasStyleChangesByFile(stylesByFile: StylesByFile, savedStylesByFile: StylesByFile) {
+  const fileNames = new Set([...Object.keys(stylesByFile), ...Object.keys(savedStylesByFile)])
+
+  for (const fileName of fileNames) {
+    if (hasStyleChanges(stylesByFile[fileName] ?? {}, savedStylesByFile[fileName] ?? {})) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function mergeStylesByFile(stylesByFile: StylesByFile) {
+  return Object.values(stylesByFile).reduce(
+    (acc, fileStyles) => ({ ...acc, ...fileStyles }),
+    {} as Styles
+  )
+}
+
 interface StyleEditorProps {
   selectedComponent: string | null
   selectedComponentSize: SelectedComponentSize | null
   components: ComponentGroup[]
+  previewRootRef: RefObject<HTMLDivElement | null>
 }
 
 const DIRECTION_OPTIONS = [
@@ -1181,8 +1232,14 @@ function RawClassTextarea({
   )
 }
 
-export function StyleEditor({ selectedComponent, selectedComponentSize, components }: StyleEditorProps) {
-  const [styles, setStyles] = useState<Styles>({})
+export function StyleEditor({
+  selectedComponent,
+  selectedComponentSize,
+  components,
+  previewRootRef,
+}: StyleEditorProps) {
+  const [stylesByFile, setStylesByFile] = useState<StylesByFile>({})
+  const [savedStylesByFile, setSavedStylesByFile] = useState<StylesByFile>({})
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState('')
@@ -1223,6 +1280,7 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
     buildBackgroundPickerDraft('#d4d4d8')
   )
   const borderPickerRef = useRef<HTMLDivElement | null>(null)
+  const loadedFileNamesRef = useRef(new Set<string>())
 
   const breadcrumb = getBreadcrumb(selectedComponent, components)
   const selectedGroup = useMemo(
@@ -1230,6 +1288,12 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
     [components, selectedComponent]
   )
   const selectedFileName = selectedGroup ? componentNameToFileName(selectedGroup.name) : null
+  const styles = selectedFileName ? stylesByFile[selectedFileName] ?? {} : {}
+  const previewStyles = useMemo(() => mergeStylesByFile(stylesByFile), [stylesByFile])
+  const previewSavedStyles = useMemo(
+    () => mergeStylesByFile(savedStylesByFile),
+    [savedStylesByFile]
+  )
   const selectedStyleValue = selectedComponent ? styles[selectedComponent] : undefined
   const selectedParentName =
     selectedComponent && selectedGroup?.name !== selectedComponent ? selectedGroup?.name ?? null : null
@@ -1246,7 +1310,8 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
     () =>
       RAW_EDITOR_GROUPS.reduce(
         (acc, group) => {
-          acc[group.key] = getCategoryText(classTokens, group.key)
+          const key = group.key as RawEditorCategory
+          acc[key] = getCategoryText(classTokens, key)
           return acc
         },
         {} as Record<RawEditorCategory, string>
@@ -1467,10 +1532,16 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
     bl: !getRoundedValue(classTokens, 'bl') && Boolean(radiusAllValue),
     br: !getRoundedValue(classTokens, 'br') && Boolean(radiusAllValue),
   }
+  const hasUnsavedChanges = hasStyleChangesByFile(stylesByFile, savedStylesByFile)
+  const statusMessage = saveMessage || (hasUnsavedChanges ? 'Unsaved changes' : '')
 
   useEffect(() => {
     if (!selectedFileName) {
-      setStyles({})
+      return
+    }
+
+    if (loadedFileNamesRef.current.has(selectedFileName)) {
+      setSaveMessage('')
       return
     }
 
@@ -1485,13 +1556,21 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
           throw new Error(data?.error ?? 'Failed to load styles')
         }
         if (!cancelled) {
-          setStyles((data?.styles ?? {}) as Styles)
+          const loadedStyles = (data?.styles ?? {}) as Styles
+          setStylesByFile((prev) => ({
+            ...prev,
+            [selectedFileName]: loadedStyles,
+          }))
+          setSavedStylesByFile((prev) => ({
+            ...prev,
+            [selectedFileName]: loadedStyles,
+          }))
+          loadedFileNamesRef.current.add(selectedFileName)
         }
       })
       .catch((error) => {
         console.error(error)
         if (!cancelled) {
-          setStyles({})
           setSaveMessage('Failed to load styles')
         }
       })
@@ -1505,6 +1584,46 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
       cancelled = true
     }
   }, [selectedFileName])
+
+  useLayoutEffect(() => {
+    const root = previewRootRef.current
+    if (!root) return
+
+    const previewedElements: HTMLElement[] = []
+
+    Object.entries(previewStyles).forEach(([componentName, styleValue]) => {
+      const slot = componentNameToSlot(componentName)
+      const elements = root.querySelectorAll(`[data-slot="${slot}"]`)
+
+      elements.forEach((element) => {
+        if (!(element instanceof HTMLElement)) return
+
+        const baseClassName =
+          element.getAttribute(PREVIEW_BASE_CLASS_ATTR) ?? element.className
+
+        if (!element.hasAttribute(PREVIEW_BASE_CLASS_ATTR)) {
+          element.setAttribute(PREVIEW_BASE_CLASS_ATTR, baseClassName)
+        }
+
+        element.className = mergePreviewClassNames(
+          styleValue,
+          previewSavedStyles[componentName],
+          baseClassName
+        )
+        previewedElements.push(element)
+      })
+    })
+
+    return () => {
+      previewedElements.forEach((element) => {
+        const baseClassName = element.getAttribute(PREVIEW_BASE_CLASS_ATTR)
+        if (baseClassName == null) return
+
+        element.className = baseClassName
+        element.removeAttribute(PREVIEW_BASE_CLASS_ATTR)
+      })
+    }
+  }, [previewRootRef, previewSavedStyles, previewStyles])
 
   useEffect(() => {
     setPaddingModeOverride(null)
@@ -1578,10 +1697,11 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
       const nextDrafts = { ...prev }
 
       RAW_EDITOR_GROUPS.forEach((group) => {
-        if (activeRawEditor === group.key) return
-        const nextValue = rawCategoryTexts[group.key]
-        if (nextDrafts[group.key] !== nextValue) {
-          nextDrafts[group.key] = nextValue
+        const key = group.key as RawEditorCategory
+        if (activeRawEditor === key) return
+        const nextValue = rawCategoryTexts[key]
+        if (nextDrafts[key] !== nextValue) {
+          nextDrafts[key] = nextValue
           changed = true
         }
       })
@@ -1591,11 +1711,17 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
   }, [activeRawEditor, rawCategoryTexts])
 
   const updateSelectedStyle = (nextTokens: string[]) => {
-    if (!selectedComponent) return
+    if (!selectedFileName || !selectedComponent) return
 
-    setStyles((prev) => ({
+    setStylesByFile((prev) => ({
       ...prev,
-      [selectedComponent]: fromClassTokens(nextTokens, prev[selectedComponent]),
+      [selectedFileName]: {
+        ...(prev[selectedFileName] ?? {}),
+        [selectedComponent]: fromClassTokens(
+          nextTokens,
+          prev[selectedFileName]?.[selectedComponent]
+        ),
+      },
     }))
   }
 
@@ -2275,9 +2401,25 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
         throw new Error('Failed to save styles')
       }
 
-      setStyles((prev) => ({
+      setStylesByFile((prev) => ({
         ...prev,
-        [selectedComponent]: fromClassTokens(nextTokens, prev[selectedComponent]),
+        [selectedFileName]: {
+          ...(prev[selectedFileName] ?? {}),
+          [selectedComponent]: fromClassTokens(
+            nextTokens,
+            prev[selectedFileName]?.[selectedComponent]
+          ),
+        },
+      }))
+      setSavedStylesByFile((prev) => ({
+        ...prev,
+        [selectedFileName]: {
+          ...(prev[selectedFileName] ?? {}),
+          [selectedComponent]: fromClassTokens(
+            nextTokens,
+            prev[selectedFileName]?.[selectedComponent]
+          ),
+        },
       }))
       setSaveMessage(`Saved to ${selectedFileName}.json`)
       setTimeout(() => setSaveMessage(''), 3000)
@@ -3608,17 +3750,21 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
             </section>
 
             <section className="space-y-2 border-t border-zinc-200 pt-5">
-              {RAW_EDITOR_GROUPS.map((group) => (
-                <RawClassTextarea
-                  key={group.key}
-                  label={group.label}
-                  value={activeRawEditor === group.key ? rawClassDrafts[group.key] : rawCategoryTexts[group.key]}
-                  onChange={(value) => handleRawCategoryChange(group.key, value)}
-                  onFocus={() => setActiveRawEditor(group.key)}
-                  onBlur={() => setActiveRawEditor(null)}
-                  placeholder={group.placeholder}
-                />
-              ))}
+              {RAW_EDITOR_GROUPS.map((group) => {
+                const key = group.key as RawEditorCategory
+
+                return (
+                  <RawClassTextarea
+                    key={key}
+                    label={group.label}
+                    value={activeRawEditor === key ? rawClassDrafts[key] : rawCategoryTexts[key]}
+                    onChange={(value) => handleRawCategoryChange(key, value)}
+                    onFocus={() => setActiveRawEditor(key)}
+                    onBlur={() => setActiveRawEditor(null)}
+                    placeholder={group.placeholder}
+                  />
+                )
+              })}
             </section>
           </>
         )}
@@ -3632,7 +3778,7 @@ export function StyleEditor({ selectedComponent, selectedComponentSize, componen
             {isSaving ? 'Saving...' : 'Save changes'}
           </button>
 
-          {saveMessage && <p className="mt-2 text-center text-xs font-medium text-zinc-500">{saveMessage}</p>}
+          {statusMessage && <p className="mt-2 text-center text-xs font-medium text-zinc-500">{statusMessage}</p>}
         </div>
       </div>
     </aside>

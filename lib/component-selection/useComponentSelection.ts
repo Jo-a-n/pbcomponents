@@ -10,7 +10,7 @@ export type SelectedComponentSize = {
   height: number
 }
 
-const componentNameToSlot = (name: string) => {
+export const componentNameToSlot = (name: string) => {
   const generatedMatch = name.match(/^Div(\d{3})(.*)$/)
   if (generatedMatch) {
     const index = generatedMatch[1]
