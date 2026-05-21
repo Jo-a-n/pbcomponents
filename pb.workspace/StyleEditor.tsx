@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, RefObject } from 'react'
 import type { ComponentGroup } from '@/lib/component-selection/types'
 import { componentNameToFileName } from '@/pb.workspace/componentNameToFileName'
 import {
@@ -84,6 +84,12 @@ type LimitKind = 'min' | 'max'
 type LimitFieldKey = `${LimitAxis}-${LimitKind}`
 type SizeAxis = 'w' | 'h'
 type SizeMode = 'Fill' | 'Hug' | 'Fixed'
+type FixedSizeDragState = {
+  pointerId: number
+  startX: number
+  startValue: number
+  hasDragged: boolean
+}
 type BackgroundPickerMode = 'hex' | 'rgb' | 'hsl'
 type BorderWidthSide = 'top' | 'right' | 'bottom' | 'left'
 type BorderWidthTarget = 'all' | 'x' | 'y' | BorderWidthSide
@@ -176,11 +182,6 @@ const FLEX_DIRECTION_OPTIONS = [
   { label: 'flex-col-reverse ↑', value: 'col-reverse', group: 'col' },
 ] as const
 
-const WRAP_OPTIONS = [
-  { label: 'flex-nowrap', value: 'flex-nowrap' },
-  { label: 'flex-wrap', value: 'flex-wrap' },
-  { label: 'flex-wrap-reverse', value: 'flex-wrap-reverse' },
-] as const
 
 const JUSTIFY_OPTIONS = [
   { label: 'none', value: '' },
@@ -210,7 +211,7 @@ const CONTENT_OPTIONS = [
 ] as const
 
 const CONTENT_HINTS = {
-  none: 'Set how wrapped lines are distributed.',
+  none: 'Distribute space between wrapped lines.',
   normal: 'Uses the browser default align-content behavior.',
   between: 'Distributes wrapped lines with equal free space between them.',
   around: 'Distributes free space around each wrapped line.',
@@ -290,7 +291,7 @@ function fieldSelectClass() {
 }
 
 function fixedSizeInputClass(hasValue: boolean) {
-  return `[font-family:var(--font-work-sans)] h-6 min-w-0 flex-1 bg-transparent text-[12px] font-medium leading-[110%] outline-none ${
+  return `[font-family:var(--font-work-sans)] h-6 min-w-0 flex-1 cursor-ew-resize bg-transparent text-[12px] font-medium leading-[110%] outline-none ${
     hasValue ? 'text-black/70' : 'text-black/40'
   }`
 }
@@ -318,10 +319,20 @@ function normalizeFixedSizePxValue(value: string) {
   return /^-?\d*\.?\d+$/.test(trimmedValue) ? `${trimmedValue}px` : ''
 }
 
+function canPreviewFixedSizeValue(value: string) {
+  const trimmedValue = value.trim()
+  return !trimmedValue || Boolean(normalizeFixedSizePxValue(trimmedValue))
+}
+
 function formatMeasuredSizeValue(value: number | undefined) {
   if (value == null || !Number.isFinite(value)) return ''
   const roundedValue = Math.round(value * 10) / 10
   return Number.isInteger(roundedValue) ? String(roundedValue) : roundedValue.toFixed(1)
+}
+
+function formatDraggedFixedSizeValue(value: number) {
+  const roundedValue = Math.max(0, Math.round(value))
+  return String(roundedValue)
 }
 
 function SizeModeCombobox({
@@ -342,6 +353,57 @@ function SizeModeCombobox({
   onFixedValueChange: (axis: SizeAxis, value: string) => void
 }) {
   const isFixed = mode === 'Fixed'
+  const [fixedDraft, setFixedDraft] = useState(fixedValue)
+  const [isFixedInputFocused, setIsFixedInputFocused] = useState(false)
+  const fixedSizeDragRef = useRef<FixedSizeDragState | null>(null)
+  const displayedFixedValue = isFixedInputFocused ? fixedDraft : fixedValue
+
+  const updateFixedDraft = (nextValue: string) => {
+    setFixedDraft(nextValue)
+    if (canPreviewFixedSizeValue(nextValue)) {
+      onFixedValueChange(axis, nextValue)
+    }
+  }
+
+  const handleFixedPointerDown = (event: ReactPointerEvent<HTMLInputElement>) => {
+    if (event.button !== 0) return
+
+    if (!isFixedInputFocused) {
+      setIsFixedInputFocused(true)
+      setFixedDraft(fixedValue)
+    }
+
+    const startingValue = Number.parseFloat(displayedFixedValue || fixedValue || fixedPlaceholder || '0')
+    fixedSizeDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startValue: Number.isFinite(startingValue) ? startingValue : 0,
+      hasDragged: false,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handleFixedPointerMove = (event: ReactPointerEvent<HTMLInputElement>) => {
+    const dragState = fixedSizeDragRef.current
+    if (!dragState || dragState.pointerId !== event.pointerId) return
+
+    const deltaX = event.clientX - dragState.startX
+    if (!dragState.hasDragged && Math.abs(deltaX) < 3) return
+
+    dragState.hasDragged = true
+    event.preventDefault()
+    updateFixedDraft(formatDraggedFixedSizeValue(dragState.startValue + deltaX))
+  }
+
+  const handleFixedPointerEnd = (event: ReactPointerEvent<HTMLInputElement>) => {
+    const dragState = fixedSizeDragRef.current
+    if (!dragState || dragState.pointerId !== event.pointerId) return
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    fixedSizeDragRef.current = null
+  }
 
   return (
     <label className="space-y-1">
@@ -362,9 +424,20 @@ function SizeModeCombobox({
           <>
             <span aria-hidden="true" className="h-3 w-px shrink-0 bg-black/10" />
             <input
-              value={fixedValue}
-              onChange={(event) => onFixedValueChange(axis, event.target.value)}
-              className={fixedSizeInputClass(Boolean(fixedValue))}
+              value={displayedFixedValue}
+              onChange={(event) => updateFixedDraft(event.target.value)}
+              onFocus={() => {
+                setIsFixedInputFocused(true)
+                setFixedDraft(fixedValue)
+              }}
+              onBlur={() => {
+                setIsFixedInputFocused(false)
+              }}
+              onPointerDown={handleFixedPointerDown}
+              onPointerMove={handleFixedPointerMove}
+              onPointerUp={handleFixedPointerEnd}
+              onPointerCancel={handleFixedPointerEnd}
+              className={fixedSizeInputClass(Boolean(displayedFixedValue))}
               placeholder={fixedPlaceholder}
               inputMode="decimal"
               aria-label={`Fixed ${label.toLowerCase()} in pixels`}
@@ -388,23 +461,33 @@ function flexTypeDotClass() {
   return 'h-[3px] w-[3px] rounded-[2px] bg-current'
 }
 
-function FlexTypeIcon({ type }: { type: 'row' | 'col' | 'grid' }) {
+function FlexTypeIcon({ type, isReverse = false }: { type: 'row' | 'col' | 'grid'; isReverse?: boolean }) {
   if (type === 'row') {
     return (
-      <span aria-hidden="true" className="flex w-[13px] items-center gap-[2px]">
-        {Array.from({ length: 3 }, (_, index) => (
-          <span key={index} className={flexTypeDotClass()} />
-        ))}
+      <span aria-hidden="true" className="flex items-center gap-[3px]">
+        <span className="flex w-[13px] items-center gap-[2px]">
+          {Array.from({ length: 3 }, (_, index) => (
+            <span key={index} className={flexTypeDotClass()} />
+          ))}
+        </span>
+        <span className="text-[10px] font-bold leading-none text-black/30">
+          {isReverse ? '←' : '→'}
+        </span>
       </span>
     )
   }
 
   if (type === 'col') {
     return (
-      <span aria-hidden="true" className="flex h-[13px] flex-col gap-[2px]">
-        {Array.from({ length: 3 }, (_, index) => (
-          <span key={index} className={flexTypeDotClass()} />
-        ))}
+      <span aria-hidden="true" className="flex items-center gap-[4px]">
+        <span className="flex h-[13px] flex-col gap-[2px]">
+          {Array.from({ length: 3 }, (_, index) => (
+            <span key={index} className={flexTypeDotClass()} />
+          ))}
+        </span>
+        <span className="text-[10px] font-bold leading-none text-black/30">
+          {isReverse ? '↑' : '↓'}
+        </span>
       </span>
     )
   }
@@ -414,6 +497,28 @@ function FlexTypeIcon({ type }: { type: 'row' | 'col' | 'grid' }) {
       {Array.from({ length: 9 }, (_, index) => (
         <span key={index} className={flexTypeDotClass()} />
       ))}
+    </span>
+  )
+}
+
+function WrapModeIcon({ type }: { type: 'wrap' | 'wrap-reverse' }) {
+  if (type === 'wrap-reverse') {
+    return (
+      <span aria-hidden="true" className="relative h-[13px] w-[16px] scale-y-[-1]">
+        <span className="absolute left-0 top-[3px] h-px w-[12px] rounded-full bg-current" />
+        <span className="absolute right-[3px] top-[3px] h-[7px] w-px rounded-full bg-current" />
+        <span className="absolute bottom-[2px] right-[3px] h-px w-[8px] rounded-full bg-current" />
+        <span className="absolute bottom-[0px] left-[4px] h-[5px] w-[5px] -rotate-[135deg] border-r border-t border-current" />
+      </span>
+    )
+  }
+
+  return (
+    <span aria-hidden="true" className="relative h-[13px] w-[16px]">
+      <span className="absolute left-0 top-[3px] h-px w-[12px] rounded-full bg-current" />
+      <span className="absolute right-[3px] top-[3px] h-[7px] w-px rounded-full bg-current" />
+      <span className="absolute bottom-[2px] right-[3px] h-px w-[8px] rounded-full bg-current" />
+      <span className="absolute bottom-[0px] left-[4px] h-[5px] w-[5px] -rotate-[135deg] border-r border-t border-current" />
     </span>
   )
 }
@@ -1271,6 +1376,7 @@ export function StyleEditor({
     buildBackgroundPickerDraft('#ffffff')
   )
   const [focusedGapAxis, setFocusedGapAxis] = useState<GapAxis | null>(null)
+  const [isAxisOptionsOpen, setIsAxisOptionsOpen] = useState(false)
   const [isWrapOptionsOpen, setIsWrapOptionsOpen] = useState(false)
   const [armedAlignmentReset, setArmedAlignmentReset] = useState<AlignmentResetTarget>(null)
   const backgroundPickerRef = useRef<HTMLDivElement | null>(null)
@@ -1280,7 +1386,9 @@ export function StyleEditor({
     buildBackgroundPickerDraft('#d4d4d8')
   )
   const borderPickerRef = useRef<HTMLDivElement | null>(null)
+  const wrapOptionsRef = useRef<HTMLDivElement | null>(null)
   const loadedFileNamesRef = useRef(new Set<string>())
+
 
   const breadcrumb = getBreadcrumb(selectedComponent, components)
   const selectedGroup = useMemo(
@@ -1381,6 +1489,20 @@ export function StyleEditor({
   const itemCrossAxisLabel = isColumnItemParent ? 'X Axis' : 'Y Axis'
   const itemAlignSelfAxisLabel = itemLayoutMode === 'grid' ? 'Y Axis' : itemCrossAxisLabel
   const itemOrderAxisLabel = itemLayoutMode === 'grid' ? 'Placement' : itemMainAxisLabel
+  const isFixedFlexSizeAxis = (axis: SizeAxis) => {
+    const isOwnFlexMainAxis = isFlex && directionMode !== 'grid' && (isColumnDirectionMode ? axis === 'h' : axis === 'w')
+    const isParentFlexMainAxis = itemLayoutMode === 'flex' && (isColumnItemParent ? axis === 'h' : axis === 'w')
+
+    return isOwnFlexMainAxis || isParentFlexMainAxis
+  }
+  const hasFixedOwnFlexMainSize =
+    isFlex &&
+    directionMode !== 'grid' &&
+    Boolean(isColumnDirectionMode ? fixedHeightPxValue : fixedWidthPxValue)
+  const hasFixedParentFlexMainSize =
+    itemLayoutMode === 'flex' && Boolean(isColumnItemParent ? fixedHeightPxValue : fixedWidthPxValue)
+  const hasFixedFlexMainSize = hasFixedOwnFlexMainSize || hasFixedParentFlexMainSize
+  const flexValueSelectValue = hasFixedParentFlexMainSize ? 'flex-none' : flexValueClass
   const mainAxisDistributionLabel = `${mainAxisLabel} Gaps Distribution`
   const crossAxisDistributionLabel = `${crossAxisLabel} Gaps Distribution`
   const itemDistributionLabel = `${mainAxisLabel.toLowerCase()} gaps`
@@ -1638,6 +1760,7 @@ export function StyleEditor({
     setActiveLimitMenu(null)
     setIsBackgroundPickerOpen(false)
     setIsBorderPickerOpen(false)
+    setIsAxisOptionsOpen(false)
     setIsWrapOptionsOpen(false)
     setArmedAlignmentReset(null)
   }, [selectedComponent])
@@ -1683,6 +1806,21 @@ export function StyleEditor({
   }, [isBorderPickerOpen])
 
   useEffect(() => {
+    if (!isWrapOptionsOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!wrapOptionsRef.current?.contains(event.target as Node)) {
+        setIsWrapOptionsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
+  }, [isWrapOptionsOpen])
+
+  useEffect(() => {
     setVisibleLimitFields((prev) => ({
       'width-min': prev['width-min'] || Boolean(minWidthClass),
       'width-max': prev['width-max'] || Boolean(maxWidthClass),
@@ -1710,7 +1848,7 @@ export function StyleEditor({
     })
   }, [activeRawEditor, rawCategoryTexts])
 
-  const updateSelectedStyle = (nextTokens: string[]) => {
+  const updateSelectedStyle = useCallback((nextTokens: string[]) => {
     if (!selectedFileName || !selectedComponent) return
 
     setStylesByFile((prev) => ({
@@ -1723,12 +1861,18 @@ export function StyleEditor({
         ),
       },
     }))
-  }
+  }, [selectedComponent, selectedFileName])
 
   const updateSingleField = (pattern: RegExp, nextValue: string) => {
     const nextTokens = replaceTokens(classTokens, pattern, nextValue ? [nextValue] : [])
     updateSelectedStyle(nextTokens)
   }
+
+  useEffect(() => {
+    if (!hasFixedFlexMainSize || !flexValueClass || flexValueClass === 'flex-none') return
+
+    updateSelectedStyle(replaceTokens(classTokens, /^flex-(1|auto|initial|none)$/, ['flex-none']))
+  }, [classTokens, flexValueClass, hasFixedFlexMainSize, updateSelectedStyle])
 
   const updateBorderWidth = (target: BorderWidthTarget, nextValue: string) => {
     if (target === 'all') {
@@ -2026,6 +2170,7 @@ export function StyleEditor({
 
   const handleDirectionChange = (nextDirection: 'row' | 'row-reverse' | 'col' | 'col-reverse' | 'grid') => {
     setArmedAlignmentReset(null)
+    setIsAxisOptionsOpen(false)
 
     if (nextDirection === 'grid') {
       updateSelectedStyle(
@@ -2168,14 +2313,31 @@ export function StyleEditor({
       nextValue = axis === 'w' ? 'w-fit' : 'h-fit'
     }
 
-    updateSingleField(pattern, nextValue)
+    const nextTokens = replaceTokens(classTokens, pattern, nextValue ? [nextValue] : [])
+    updateSelectedStyle(
+      isFixedFlexSizeAxis(axis) && flexValueClass === 'flex-none'
+        ? replaceTokens(nextTokens, /^flex-(1|auto|initial|none)$/, [])
+        : nextTokens
+    )
   }
 
   const handleFixedSizeValueChange = (axis: SizeAxis, value: string) => {
     const normalizedValue = normalizeFixedSizePxValue(value)
-    updateSingleField(
+    const isFlexSizeAxis = isFixedFlexSizeAxis(axis)
+    const nextTokens = replaceTokens(
+      classTokens,
       sizeTokenPattern(axis),
-      normalizedValue ? `${axis}-[${normalizedValue}]` : ''
+      normalizedValue ? [`${axis}-[${normalizedValue}]`] : []
+    )
+
+    updateSelectedStyle(
+      isFlexSizeAxis
+        ? replaceTokens(
+            nextTokens,
+            /^flex-(1|auto|initial|none)$/,
+            normalizedValue ? ['flex-none'] : []
+          )
+        : nextTokens
     )
   }
 
@@ -2376,7 +2538,7 @@ export function StyleEditor({
   }
 
   const handleSave = async () => {
-    if (!selectedFileName || !selectedComponent) return
+    if (!selectedFileName || !selectedComponent || !hasUnsavedChanges) return
 
     const nextTokens = normalizeCornerRadiusTokensForSave(
       normalizeGapTokensForSave(normalizePaddingTokensForSave())
@@ -2452,17 +2614,6 @@ export function StyleEditor({
 
           {selectedComponent && (
             <>
-              <div className="flex items-center gap-3 pt-1">
-                <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">Flex</p>
-                <button
-                  type="button"
-                  onClick={handleFlexToggle}
-                  className={switchTrackClass(isFlex)}
-                >
-                  <span className={switchThumbClass(isFlex)} />
-                </button>
-              </div>
-
               <div className="grid grid-cols-2 gap-3">
                 <SizeModeCombobox
                   label="Width"
@@ -2484,6 +2635,141 @@ export function StyleEditor({
                   onFixedValueChange={handleFixedSizeValueChange}
                 />
               </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <span className={`flex-1 ${tinyLabelClass()}`}>Clip content to limits</span>
+                  <button
+                    type="button"
+                    onClick={handleClipContentToggle}
+                    className={switchTrackClass(clipsContent)}
+                    aria-pressed={clipsContent}
+                    aria-label="Clip content to radius"
+                  >
+                    <span className={switchThumbClass(clipsContent)} />
+                  </button>
+                </div>
+
+                <div className="space-y-0.5">
+                  <div className={`${tinyLabelClass()}`}>Dimension Restrictions</div>
+                  <p className={tinyHintClass()}>
+                    Tailwind tokens, px, %, rem, em, vw, vh, auto, full, fit, min, or max
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <div className="relative flex items-center gap-2">
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Width (Max/Min)</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveLimitMenu((prev) => (prev === 'width' ? null : 'width'))
+                      }
+                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
+                      aria-label="Add width limit"
+                      title="Add width limit"
+                    >
+                      +
+                    </button>
+                    {activeLimitMenu === 'width' && (
+                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
+                        {(['min', 'max'] as const).map((kind) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => showLimitField('width', kind)}
+                            disabled={visibleLimitFields[limitFieldKey('width', kind)]}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                          >
+                            Add {kind}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {visibleLimitFields['width-min'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.width.min.label}
+                      value={limitFieldConfig.width.min.value}
+                      onChange={(value) => handleLimitValueChange('width', 'min', value)}
+                      onClear={() => hideLimitField('width', 'min')}
+                      placeholder={limitFieldConfig.width.min.placeholder}
+                      ariaLabel={limitFieldConfig.width.min.ariaLabel}
+                    />
+                  )}
+
+                  {visibleLimitFields['width-max'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.width.max.label}
+                      value={limitFieldConfig.width.max.value}
+                      onChange={(value) => handleLimitValueChange('width', 'max', value)}
+                      onClear={() => hideLimitField('width', 'max')}
+                      placeholder={limitFieldConfig.width.max.placeholder}
+                      ariaLabel={limitFieldConfig.width.max.ariaLabel}
+                    />
+                  )}
+
+                  {hasWidthLimitConflict && (
+                    <p className="text-[10px] font-medium leading-tight text-red-500">
+                      Min width is larger than max width.
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="relative flex items-center gap-2">
+                    <span className={`flex-1 ${tinyLabelClass()}`}>Height (Max/Min)</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveLimitMenu((prev) => (prev === 'height' ? null : 'height'))
+                      }
+                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
+                      aria-label="Add height limit"
+                      title="Add height limit"
+                    >
+                      +
+                    </button>
+                    {activeLimitMenu === 'height' && (
+                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
+                        {(['min', 'max'] as const).map((kind) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            onClick={() => showLimitField('height', kind)}
+                            disabled={visibleLimitFields[limitFieldKey('height', kind)]}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                          >
+                            Add {kind}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {visibleLimitFields['height-min'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.height.min.label}
+                      value={limitFieldConfig.height.min.value}
+                      onChange={(value) => handleLimitValueChange('height', 'min', value)}
+                      onClear={() => hideLimitField('height', 'min')}
+                      placeholder={limitFieldConfig.height.min.placeholder}
+                      ariaLabel={limitFieldConfig.height.min.ariaLabel}
+                    />
+                  )}
+
+                  {visibleLimitFields['height-max'] && (
+                    <LimitValueField
+                      label={limitFieldConfig.height.max.label}
+                      value={limitFieldConfig.height.max.value}
+                      onChange={(value) => handleLimitValueChange('height', 'max', value)}
+                      onClear={() => hideLimitField('height', 'max')}
+                      placeholder={limitFieldConfig.height.max.placeholder}
+                      ariaLabel={limitFieldConfig.height.max.ariaLabel}
+                    />
+                  )}
+                </div>
+              </div>
             </>
           )}
         </section>
@@ -2491,13 +2777,22 @@ export function StyleEditor({
         {selectedComponent && (
           <>
             <section className="space-y-4 border-b border-zinc-200 pb-5">
-              <div className="space-y-0.5 pt-1">
-                <p className="text-base font-bold tracking-[-0.02em] text-black">
-                  Flex/Grid
-                </p>
+              <div className="flex items-center gap-3 pt-1">
+                <p className="flex-1 text-base font-bold tracking-[-0.02em] text-black">Flex/Grid</p>
+                <button
+                  type="button"
+                  onClick={handleFlexToggle}
+                  className={switchTrackClass(isFlex)}
+                  aria-pressed={isFlex}
+                  aria-label="Enable flex layout"
+                >
+                  <span className={switchThumbClass(isFlex)} />
+                </button>
               </div>
 
-              <div className="space-y-1">
+              {(isFlex || directionMode === 'grid') && (
+              <>
+              <div className="relative space-y-1">
                 <span className={tinyLabelClass()}>Layout Axis</span>
                 <div className="grid grid-cols-3 gap-1">
                   {DIRECTION_OPTIONS.map((option) => {
@@ -2507,100 +2802,175 @@ export function StyleEditor({
                         : option.value === 'row'
                           ? directionMode === 'row' || directionMode === 'row-reverse'
                           : directionMode === 'col' || directionMode === 'col-reverse'
+                    const nextDirection =
+                      option.value === 'row'
+                        ? directionMode === 'row-reverse'
+                          ? 'row-reverse'
+                          : 'row'
+                        : option.value === 'col'
+                          ? directionMode === 'col-reverse'
+                            ? 'col-reverse'
+                            : 'col'
+                          : 'grid'
+                    const canHaveOptions = option.value !== 'grid'
+                    const canShowOptions = isActive && canHaveOptions
+
                     return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => handleDirectionChange(option.value)}
-                        className={`flex h-[21px] items-center justify-center rounded-lg py-4 transition ${
-                          isActive ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
-                        }`}
-                        aria-label={option.label}
-                        title={option.label}
-                      >
-                        <FlexTypeIcon type={option.value} />
-                      </button>
+                      <div key={option.value} className="relative min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => handleDirectionChange(nextDirection)}
+                          className={`flex h-[21px] w-full items-center justify-center rounded-lg py-4 transition ${
+                            isActive ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
+                          } ${canHaveOptions ? 'pr-6' : ''}`}
+                          aria-label={option.label}
+                          title={option.label}
+                        >
+                          <FlexTypeIcon
+                            type={option.value}
+                            isReverse={
+                              option.value === 'row'
+                                ? directionMode === 'row-reverse'
+                                : option.value === 'col'
+                                  ? directionMode === 'col-reverse'
+                                  : false
+                            }
+                          />
+                        </button>
+                        {canShowOptions && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setIsAxisOptionsOpen((prev) => !prev)
+                            }}
+                            className={`absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[11px] font-bold transition ${
+                              isAxisOptionsOpen
+                                ? 'bg-black text-white shadow-sm'
+                                : 'bg-white text-black/45 shadow-sm hover:text-black'
+                            }`}
+                            aria-expanded={isAxisOptionsOpen}
+                            aria-label="Open axis options"
+                            title="Open axis options"
+                          >
+                            ...
+                          </button>
+                        )}
+                      </div>
                     )
                   })}
                 </div>
+                {isAxisOptionsOpen && directionMode !== 'grid' && (
+                  <div className="absolute left-0 right-0 top-full z-20 mt-2 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => setIsAxisOptionsOpen(false)}
+                      className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[12px] font-bold leading-none text-black/55 transition hover:bg-black hover:text-white"
+                      aria-label="Close axis options"
+                      title="Close axis options"
+                    >
+                      x
+                    </button>
+                    <label className="flex items-start gap-2 rounded-lg bg-gray-100 px-2 py-1.5 pr-6">
+                      <input
+                        type="checkbox"
+                        checked={directionMode === 'row-reverse' || directionMode === 'col-reverse'}
+                        onChange={(event) => {
+                          const isColumn = directionMode === 'col' || directionMode === 'col-reverse'
+                          const nextDirection = event.target.checked
+                            ? isColumn
+                              ? 'col-reverse'
+                              : 'row-reverse'
+                            : isColumn
+                              ? 'col'
+                              : 'row'
+
+                          handleDirectionChange(nextDirection)
+                        }}
+                        className="mt-0.5 h-3.5 w-3.5 accent-black"
+                        aria-label="Reverse axis direction"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className={`${tinyLabelClass()} block`}>Reverse direction</span>
+                        <span className={`${tinyHintClass()} block`}>
+                          Flips the selected axis while keeping the same row or column layout.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                )}
               </div>
 
-              {directionMode !== 'grid' && (
-                <div className="space-y-1">
-                  <span className={tinyLabelClass()}>Direction</span>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
-                    {[
-                      {
-                        label: flexDirectionOptionGroup === 'col' ? 'Normal ↓' : 'Normal →',
-                        value: flexDirectionOptionGroup === 'col' ? 'col' : 'row',
-                      },
-                      {
-                        label: flexDirectionOptionGroup === 'col' ? 'Reverse ↑' : 'Reverse ←',
-                        value: flexDirectionOptionGroup === 'col' ? 'col-reverse' : 'row-reverse',
-                      },
-                    ].map((option) => (
+              <div className="relative space-y-1" ref={wrapOptionsRef}>
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-1">
+                    <span className={`${tinyLabelClass()} w-1/3 shrink-0`}>Wrap?</span>
+                    <span className="w-6 shrink-0" aria-hidden="true" />
+                    <span className={`${tinyLabelClass()} flex-1 ${canUseAlignContent ? '' : 'invisible'}`}>
+                      {crossAxisLabel} gaps
+                    </span>
+                  </div>
+                  <div className={`flex items-center gap-1 ${directionMode === 'grid' ? 'opacity-55' : ''}`}>
+                    <div className="w-1/3 shrink-0">
                       <button
-                        key={option.value}
                         type="button"
-                        onClick={() =>
-                          handleDirectionChange(
-                            option.value as 'row' | 'row-reverse' | 'col' | 'col-reverse'
-                          )
-                        }
-                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
-                          directionMode === option.value ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
+                        aria-pressed={canUseAlignContent}
+                        disabled={directionMode === 'grid'}
+                        onClick={() => handleWrapChange(canUseAlignContent ? 'flex-nowrap' : 'flex-wrap')}
+                        className={`flex w-full items-center justify-center gap-1 rounded-lg py-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
+                          canUseAlignContent ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
                         }`}
                       >
-                        {option.label}
+                        Yes
+                        <WrapModeIcon type={wrapMode === 'flex-wrap-reverse' ? 'wrap-reverse' : 'wrap'} />
                       </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="relative space-y-1">
-                <div className="space-y-0.5">
-                  <span className={tinyLabelClass()}>Wrap?</span>
-                </div>
-                <div className="flex gap-1">
-                  <div className={`${fieldShellClass()} flex-1`}>
-                    <select
-                      value={directionMode === 'grid' ? '' : wrapMode}
-                      onChange={(event) => handleWrapChange(event.target.value)}
-                      disabled={directionMode === 'grid'}
-                      className={`${fieldSelectClass()} disabled:cursor-not-allowed disabled:text-black/30`}
-                      aria-label="Wrap mode"
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsWrapOptionsOpen((prev) => !prev)}
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[12px] font-bold transition ${
+                        canUseAlignContent ? '' : 'invisible'
+                      } ${
+                        isWrapOptionsOpen
+                          ? 'bg-black text-white shadow-sm'
+                          : 'bg-gray-100 text-black/45 hover:text-black'
+                      }`}
+                      aria-expanded={isWrapOptionsOpen}
+                      aria-label="Open wrap options"
+                      title="Open wrap options"
                     >
-                      {directionMode === 'grid' ? (
-                        <option value="">Grid does not use flex wrap</option>
-                      ) : (
-                        WRAP_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))
+                      ...
+                    </button>
+                    <div className={`group relative flex-1 ${canUseAlignContent ? '' : 'invisible'}`}>
+                      <div className={`${fieldShellClass()} !h-auto py-2`}>
+                        <select
+                          value={canUseAlignContent ? contentSelectValue : ''}
+                          onChange={(event) =>
+                            handleAdvancedFlexTokenChange(/^content-.+$/, event.target.value)
+                          }
+                          disabled={!canUseAlignContent}
+                          className={`${fieldSelectClass()} ${
+                            contentSelectValue ? 'opacity-100' : 'opacity-40'
+                          } disabled:cursor-not-allowed`}
+                          aria-label={crossAxisDistributionLabel}
+                          title={crossAxisDistributionLabel}
+                        >
+                          {CONTENT_OPTIONS.map((option) => (
+                            <option key={option.label} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {canUseAlignContent && (
+                        <p className={`${tinyHintClass()} absolute left-0 right-0 top-full pt-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}>
+                          {contentHint}
+                        </p>
                       )}
-                    </select>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsWrapOptionsOpen((prev) => !prev)}
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[12px] font-bold transition ${
-                      isWrapOptionsOpen
-                        ? 'bg-black text-white shadow-sm'
-                        : 'bg-gray-100 text-black/60 hover:text-black'
-                    }`}
-                    aria-expanded={isWrapOptionsOpen}
-                    aria-label="Open wrap options"
-                    title="Open wrap options"
-                  >
-                    ...
-                  </button>
                 </div>
-                <p className={tinyHintClass()}>
-                  {directionMode === 'grid' ? 'Grid layout does not use flex wrap' : 'Choose how items wrap'}
-                </p>
-                {isWrapOptionsOpen && (
+                {isWrapOptionsOpen && canUseAlignContent && (
                   <div className="absolute left-0 right-0 top-full z-20 mt-2 rounded-2xl border border-zinc-200 bg-white p-3 shadow-xl">
                     <button
                       type="button"
@@ -2611,27 +2981,40 @@ export function StyleEditor({
                     >
                       x
                     </button>
-                    {canUseAlignContent ? (
+                    <div className="space-y-2 pr-5">
                       <label className="flex items-start gap-2 rounded-lg bg-gray-100 px-2 py-1.5">
-                          <input
-                            type="checkbox"
-                            checked={isContentBaselineActive}
-                            onChange={handleContentBaselineToggle}
-                            className="mt-0.5 h-3.5 w-3.5 accent-black"
-                            aria-label="Use content-baseline"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className={`${tinyLabelClass()} block`}>content-baseline</span>
-                            <span className={`${tinyHintClass()} block`}>
-                              Aligns wrapped lines by their text baselines when supported.
-                            </span>
+                        <input
+                          type="checkbox"
+                          checked={wrapMode === 'flex-wrap-reverse'}
+                          onChange={(event) =>
+                            handleWrapChange(event.target.checked ? 'flex-wrap-reverse' : 'flex-wrap')
+                          }
+                          className="mt-0.5 h-3.5 w-3.5 accent-black"
+                          aria-label="Reverse wrap direction"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className={`${tinyLabelClass()} block`}>Reverse wrap direction</span>
+                          <span className={`${tinyHintClass()} block`}>
+                            Places new wrapped lines on the opposite side of the wrap axis.
                           </span>
-                        </label>
-                    ) : (
-                      <p className={`${tinyHintClass()} pr-6`}>
-                        Wrap axis options appear when flex-wrap or flex-wrap-reverse is selected.
-                      </p>
-                    )}
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-2 rounded-lg bg-gray-100 px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={isContentBaselineActive}
+                          onChange={handleContentBaselineToggle}
+                          className="mt-0.5 h-3.5 w-3.5 accent-black"
+                          aria-label="Use content-baseline"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className={`${tinyLabelClass()} block`}>content-baseline</span>
+                          <span className={`${tinyHintClass()} block`}>
+                            Aligns wrapped lines by their text baselines when supported.
+                          </span>
+                        </span>
+                      </label>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2678,30 +3061,6 @@ export function StyleEditor({
                     <p className={tinyHintClass()}>{justifyHint}</p>
                   </label>
 
-                  {canUseAlignContent && (
-                    <label className="block space-y-1">
-                      <span className={tinyLabelClass()}>{crossAxisDistributionLabel}</span>
-                      <div className={fieldShellClass()}>
-                        <select
-                          value={contentSelectValue}
-                          onChange={(event) =>
-                            handleAdvancedFlexTokenChange(/^content-.+$/, event.target.value)
-                          }
-                          className={`${fieldSelectClass()} ${
-                            contentSelectValue ? 'opacity-100' : 'opacity-40'
-                          }`}
-                          aria-label="Align content"
-                        >
-                          {CONTENT_OPTIONS.map((option) => (
-                            <option key={option.label} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <p className={tinyHintClass()}>{contentHint}</p>
-                    </label>
-                  )}
                 </div>
               </div>
 
@@ -2744,7 +3103,7 @@ export function StyleEditor({
                   </label>
                 ) : (
                   <div className="grid grid-cols-2 gap-3">
-                    <label className="block min-w-0 flex-1 space-y-1">
+                    <label className={`block min-w-0 flex-1 space-y-1 transition ${!gapXClass ? 'opacity-40' : ''}`}>
                       <div className="space-y-0.5">
                         <span className={tinyLabelClass()}>x-axis</span>
                       </div>
@@ -2759,9 +3118,7 @@ export function StyleEditor({
                             }
                           }}
                           onBlur={() => setFocusedGapAxis(null)}
-                          className={`min-w-0 flex-1 bg-transparent text-[12px] font-medium outline-none ${
-                            isGapXFallback ? 'text-black/40' : 'text-black'
-                          }`}
+                          className="min-w-0 flex-1 bg-transparent text-[12px] font-medium outline-none text-black"
                           placeholder="none"
                           aria-label="Gap x-axis"
                         />
@@ -2864,6 +3221,8 @@ export function StyleEditor({
 
                 </div>
               </details>
+              </>
+              )}
             </section>
 
             {itemLayoutMode && (
@@ -2884,11 +3243,11 @@ export function StyleEditor({
                         <span className={tinyLabelClass()}>Flex · {itemMainAxisLabel}</span>
                         <div className={fieldShellClass()}>
                           <select
-                            value={flexValueClass}
+                            value={flexValueSelectValue}
                             onChange={(event) =>
                               handleAdvancedFlexTokenChange(/^flex-(1|auto|initial|none)$/, event.target.value)
                             }
-                            className={`${fieldSelectClass()} ${flexValueClass ? 'opacity-100' : 'opacity-40'}`}
+                            className={`${fieldSelectClass()} ${flexValueSelectValue ? 'opacity-100' : 'opacity-40'}`}
                             aria-label="Flex value"
                           >
                             {FLEX_VALUE_OPTIONS.map((option) => (
@@ -3533,19 +3892,7 @@ export function StyleEditor({
             </section>
 
             <section className="space-y-5">
-              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Limits & Corners</p>
-              <div className="flex items-center gap-3">
-                <span className={`flex-1 ${tinyLabelClass()}`}>Clip content to limits</span>
-                <button
-                  type="button"
-                  onClick={handleClipContentToggle}
-                  className={switchTrackClass(clipsContent)}
-                  aria-pressed={clipsContent}
-                  aria-label="Clip content to radius"
-                >
-                  <span className={switchThumbClass(clipsContent)} />
-                </button>
-              </div>
+              <p className="pt-1 text-base font-bold tracking-[-0.02em] text-black">Corners</p>
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3">
@@ -3625,128 +3972,6 @@ export function StyleEditor({
                   )}
                 </div>
               </div>
-
-              <div className="space-y-3">
-                <div className="space-y-0.5">
-                  <div className={`${tinyLabelClass()}`}>Dimension Restrictions</div>
-                  <p className={tinyHintClass()}>
-                    Tailwind tokens, px, %, rem, em, vw, vh, auto, full, fit, min, or max
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <div className="relative flex items-center gap-2">
-                    <span className={`flex-1 ${tinyLabelClass()}`}>Width (Max/Min)</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveLimitMenu((prev) => (prev === 'width' ? null : 'width'))
-                      }
-                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
-                      aria-label="Add width limit"
-                      title="Add width limit"
-                    >
-                      +
-                    </button>
-                    {activeLimitMenu === 'width' && (
-                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
-                        {(['min', 'max'] as const).map((kind) => (
-                          <button
-                            key={kind}
-                            type="button"
-                            onClick={() => showLimitField('width', kind)}
-                            disabled={visibleLimitFields[limitFieldKey('width', kind)]}
-                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
-                          >
-                            Add {kind}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {visibleLimitFields['width-min'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.width.min.label}
-                      value={limitFieldConfig.width.min.value}
-                      onChange={(value) => handleLimitValueChange('width', 'min', value)}
-                      onClear={() => hideLimitField('width', 'min')}
-                      placeholder={limitFieldConfig.width.min.placeholder}
-                      ariaLabel={limitFieldConfig.width.min.ariaLabel}
-                    />
-                  )}
-
-                  {visibleLimitFields['width-max'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.width.max.label}
-                      value={limitFieldConfig.width.max.value}
-                      onChange={(value) => handleLimitValueChange('width', 'max', value)}
-                      onClear={() => hideLimitField('width', 'max')}
-                      placeholder={limitFieldConfig.width.max.placeholder}
-                      ariaLabel={limitFieldConfig.width.max.ariaLabel}
-                    />
-                  )}
-
-                  {hasWidthLimitConflict && (
-                    <p className="text-[10px] font-medium leading-tight text-red-500">
-                      Min width is larger than max width.
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <div className="relative flex items-center gap-2">
-                    <span className={`flex-1 ${tinyLabelClass()}`}>Height (Max/Min)</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setActiveLimitMenu((prev) => (prev === 'height' ? null : 'height'))
-                      }
-                      className="flex h-[18px] w-[18px] items-center justify-center text-lg leading-none text-black"
-                      aria-label="Add height limit"
-                      title="Add height limit"
-                    >
-                      +
-                    </button>
-                    {activeLimitMenu === 'height' && (
-                      <div className="absolute right-0 top-6 z-10 min-w-[110px] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg">
-                        {(['min', 'max'] as const).map((kind) => (
-                          <button
-                            key={kind}
-                            type="button"
-                            onClick={() => showLimitField('height', kind)}
-                            disabled={visibleLimitFields[limitFieldKey('height', kind)]}
-                            className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
-                          >
-                            Add {kind}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {visibleLimitFields['height-min'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.height.min.label}
-                      value={limitFieldConfig.height.min.value}
-                      onChange={(value) => handleLimitValueChange('height', 'min', value)}
-                      onClear={() => hideLimitField('height', 'min')}
-                      placeholder={limitFieldConfig.height.min.placeholder}
-                      ariaLabel={limitFieldConfig.height.min.ariaLabel}
-                    />
-                  )}
-
-                  {visibleLimitFields['height-max'] && (
-                    <LimitValueField
-                      label={limitFieldConfig.height.max.label}
-                      value={limitFieldConfig.height.max.value}
-                      onChange={(value) => handleLimitValueChange('height', 'max', value)}
-                      onClear={() => hideLimitField('height', 'max')}
-                      placeholder={limitFieldConfig.height.max.placeholder}
-                      ariaLabel={limitFieldConfig.height.max.ariaLabel}
-                    />
-                  )}
-                </div>
-              </div>
             </section>
 
             <section className="space-y-2 border-t border-zinc-200 pt-5">
@@ -3772,10 +3997,10 @@ export function StyleEditor({
         <div className="sticky bottom-0 -mx-3 border-t border-zinc-200 bg-white/95 px-3 pb-5 pt-4 backdrop-blur">
           <button
             onClick={handleSave}
-            disabled={isSaving || isLoading || !selectedComponent}
+            disabled={isSaving || isLoading || !selectedComponent || !hasUnsavedChanges}
             className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
           >
-            {isSaving ? 'Saving...' : 'Save changes'}
+            {isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save changes' : 'No changes to save'}
           </button>
 
           {statusMessage && <p className="mt-2 text-center text-xs font-medium text-zinc-500">{statusMessage}</p>}
