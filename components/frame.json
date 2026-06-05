@@ -1,15 +1,16 @@
 {
   "Frame": [
-    "px-2 py-4",
-    "size-full w-[320px] h-[400px] rounded-xl",
-    "gap-x-4 gap-y-5 items-center flex flex-row justify-around",
+    "px-2 py-0",
+    "w-full h-[240px] rounded-[20px]",
+    "items-center flex gap-[20px] flex-none flex-row justify-evenly",
     "bg-none",
-    "border-yellow-300 border-2"
+    "border-2 border-[hsl(275_100%_56%)]",
+    "overflow-hidden"
   ],
   "FrameTitle": [
     "pt-none pr-none pb-none pl-none",
-    "w-fit max-w-[200px] h-fit rounded-none",
-    "flex justify-items-end items-center gap-0 self-center flex-1",
+    "h-full min-w-0 rounded-none",
+    "items-center gap-0 flex flex-row flex-1",
     "text-start",
     "bg-red-50",
     "border-2"
@@ -17,16 +18,16 @@
   "//comment": "flex-none and basis fight each other",
   "FrameAction": [
     "pt-none pr-none pb-none pl-none",
-    "h-fit w-fit rounded-none",
-    "justify-items-center items-center flex-initial self-end",
+    "h-fit min-w-0 rounded-none",
+    "items-center flex flex-row flex-1",
     "text-start",
     "bg-red-50",
     "border-0"
   ],
   "FrameAction2": [
     "px-6 py-6",
-    "w-fit rounded-none",
-    "flex justify-items-center items-center flex-row flex-none self-start",
+    "rounded-none",
+    "flex flex-row justify-start items-center flex-1",
     "text-start",
     "bg-red-50",
     "border-2 border-neutral-800"

@@ -183,7 +183,7 @@ export function LibraryWorkspace({ components, children }: LibraryWorkspaceProps
         <div className="overflow-x-auto pb-6">
           <div
             ref={canvasRef}
-            className="mx-auto space-y-8"
+            className="mx-auto box-border space-y-8 border-x border-neutral-300 px-5 dark:border-neutral-700"
             style={{ width: `${pageWidth}px` }}
             onClickCapture={handleCanvasClickCapture}
             onDoubleClickCapture={handleCanvasDoubleClickCapture}
