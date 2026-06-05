@@ -69,6 +69,9 @@ import {
   removeBorderWidthTokens,
   buildBorderWidthToken,
   getPaddingTokensForAxis,
+  translateChildTokensOnFlexOff,
+  translateChildTokensOnFlexOn,
+  translateChildTokensOnSwitchToGrid,
 } from '@/lib/style-editor/style-editor-helpers.mjs'
 
 type StyleValue = string | string[]
@@ -93,7 +96,6 @@ type FixedSizeDragState = {
 type BackgroundPickerMode = 'hex' | 'rgb' | 'hsl'
 type BorderWidthSide = 'top' | 'right' | 'bottom' | 'left'
 type BorderWidthTarget = 'all' | 'x' | 'y' | BorderWidthSide
-type GapMode = 'universal' | 'axes'
 type GapAxis = 'x' | 'y'
 type AlignmentMatrixValue =
   | 'top-left'
@@ -229,13 +231,6 @@ const SELF_OPTIONS = [
   { label: 'Baseline', value: 'self-baseline' },
 ] as const
 
-const FLEX_VALUE_OPTIONS = [
-  { label: 'Default', value: '' },
-  { label: 'Fill available space', value: 'flex-1' },
-  { label: 'Auto size, can grow', value: 'flex-auto' },
-  { label: 'Initial size, can shrink', value: 'flex-initial' },
-  { label: 'Fixed size', value: 'flex-none' },
-] as const
 
 const GROW_OPTIONS = [
   { label: 'Default', value: '' },
@@ -335,12 +330,16 @@ function formatDraggedFixedSizeValue(value: number) {
   return String(roundedValue)
 }
 
+const SIZE_MODE_OPTIONS: SizeMode[] = ['Fill', 'Hug', 'Fixed']
+
 function SizeModeCombobox({
   label,
   axis,
   mode,
   fixedValue,
   fixedPlaceholder,
+  disableFill = false,
+  isFlexMainAxis = false,
   onModeChange,
   onFixedValueChange,
 }: {
@@ -349,14 +348,29 @@ function SizeModeCombobox({
   mode: SizeMode
   fixedValue: string
   fixedPlaceholder: string
+  disableFill?: boolean
+  isFlexMainAxis?: boolean
   onModeChange: (axis: SizeAxis, mode: SizeMode) => void
   onFixedValueChange: (axis: SizeAxis, value: string) => void
 }) {
   const isFixed = mode === 'Fixed'
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [fixedDraft, setFixedDraft] = useState(fixedValue)
   const [isFixedInputFocused, setIsFixedInputFocused] = useState(false)
   const fixedSizeDragRef = useRef<FixedSizeDragState | null>(null)
+  const dropdownRef = useRef<HTMLDivElement | null>(null)
   const displayedFixedValue = isFixedInputFocused ? fixedDraft : fixedValue
+
+  useEffect(() => {
+    if (!isDropdownOpen) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!dropdownRef.current?.contains(event.target as Node)) {
+        setIsDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [isDropdownOpen])
 
   const updateFixedDraft = (nextValue: string) => {
     setFixedDraft(nextValue)
@@ -409,17 +423,42 @@ function SizeModeCombobox({
     <label className="space-y-1">
       <span className={tinyLabelClass()}>{label}</span>
       <div className={fieldShellClass()}>
-        <select
-          value={mode}
-          onChange={(event) => onModeChange(axis, event.target.value as SizeMode)}
-          className={`[font-family:var(--font-work-sans)] bg-transparent text-[12px] font-medium leading-[110%] text-black/70 outline-none ${
-            isFixed ? 'w-[76px] shrink-0' : 'w-full'
-          }`}
-        >
-          <option value="Fill">{sizeModeLabel('Fill', axis)}</option>
-          <option value="Hug">{sizeModeLabel('Hug', axis)}</option>
-          <option value="Fixed">{sizeModeLabel('Fixed', axis)}</option>
-        </select>
+        <div ref={dropdownRef} className={`relative ${isFixed ? 'w-[76px] shrink-0' : 'w-full'}`}>
+          <button
+            type="button"
+            onClick={() => setIsDropdownOpen((prev) => !prev)}
+            className="[font-family:var(--font-work-sans)] w-full bg-transparent text-left text-[12px] font-medium leading-[110%] text-black/70 outline-none"
+          >
+            {sizeModeLabel(mode, axis, isFlexMainAxis)}
+          </button>
+          {isDropdownOpen && (
+            <div className="absolute left-0 top-full z-20 mt-1 min-w-[120px] overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-lg">
+              {SIZE_MODE_OPTIONS.map((option) => {
+                const isDisabled = option === 'Fill' && disableFill
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    disabled={isDisabled}
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      if (isDisabled) return
+                      onModeChange(axis, option)
+                      setIsDropdownOpen(false)
+                    }}
+                    className={`[font-family:var(--font-work-sans)] w-full px-3 py-1 text-left text-[12px] font-medium leading-[110%] transition ${
+                      isDisabled
+                        ? 'cursor-default opacity-40'
+                        : 'cursor-pointer text-black/70 hover:bg-zinc-100'
+                    } ${option === mode ? 'text-black' : ''}`}
+                  >
+                    {sizeModeLabel(option, axis, isFlexMainAxis && option === 'Fill')}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
         {isFixed && (
           <>
             <span aria-hidden="true" className="h-3 w-px shrink-0 bg-black/10" />
@@ -532,6 +571,52 @@ function GapAxisIcon({ axis }: { axis: GapAxis }) {
       <span className="h-full w-[5px] rounded-full bg-black/20" />
       <span className="h-full w-[5px] rounded-full bg-black/20" />
     </span>
+  )
+}
+
+function GapAxisInput({
+  axis,
+  value,
+  onChange,
+  isFallback,
+  hasExplicitClass,
+  showAutoSuffix,
+  onFocus,
+  onBlur,
+}: {
+  axis: GapAxis
+  value: string
+  onChange: (value: string) => void
+  isFallback: boolean
+  hasExplicitClass: boolean
+  showAutoSuffix: boolean
+  onFocus: () => void
+  onBlur: () => void
+}) {
+  return (
+    <label className={`block min-w-0 flex-1 space-y-1 transition ${!hasExplicitClass ? 'opacity-40' : ''}`}>
+      <span className={tinyLabelClass()}>{axis}-axis</span>
+      <div className="flex h-6 items-center gap-2 rounded-lg bg-gray-100 px-3">
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onFocus={(event) => {
+            onFocus()
+            if (isFallback) event.currentTarget.select()
+          }}
+          onBlur={onBlur}
+          className="min-w-0 flex-1 bg-transparent text-[12px] font-medium text-black outline-none"
+          placeholder="none"
+          aria-label={`Gap ${axis}-axis`}
+        />
+        {showAutoSuffix && (
+          <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-black/35">
+            {' + auto'}
+          </span>
+        )}
+        <GapAxisIcon axis={axis} />
+      </div>
+    </label>
   )
 }
 
@@ -770,11 +855,15 @@ function AlignmentMatrixControl({
   value,
   onChange,
   hasResetConflict = false,
+  contentOnlyConflict = false,
+  isColumnDirection = false,
   armedResetValue = null,
 }: {
   value: AlignmentMatrixValue | null
   onChange: (value: AlignmentMatrixValue) => void
   hasResetConflict?: boolean
+  contentOnlyConflict?: boolean
+  isColumnDirection?: boolean
   armedResetValue?: AlignmentResetTarget
 }) {
   return (
@@ -786,7 +875,10 @@ function AlignmentMatrixControl({
       {ALIGNMENT_MATRIX_OPTIONS.map((option) => {
         const isActive = value === option.value
         const isArmed = armedResetValue === option.value
-        const iconOpacity = hasResetConflict ? (isArmed ? 0.28 : 0.04) : undefined
+        const isMidLineExempt = contentOnlyConflict && (
+          isColumnDirection ? option.horizontal === 'center' : option.vertical === 'center'
+        )
+        const iconOpacity = hasResetConflict ? (isArmed ? 0.28 : isMidLineExempt ? undefined : 0.04) : undefined
 
         return (
           <button
@@ -1349,7 +1441,7 @@ export function StyleEditor({
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState('')
   const [paddingModeOverride, setPaddingModeOverride] = useState<PaddingMode | null>(null)
-  const [gapModeOverride, setGapModeOverride] = useState<GapMode | null>(null)
+
   const [cornerRadiusModeOverride, setCornerRadiusModeOverride] = useState<CornerRadiusMode | null>(null)
   const [visibleLimitFields, setVisibleLimitFields] = useState<Record<LimitFieldKey, boolean>>({
     'width-min': false,
@@ -1379,6 +1471,9 @@ export function StyleEditor({
   const [isAxisOptionsOpen, setIsAxisOptionsOpen] = useState(false)
   const [isWrapOptionsOpen, setIsWrapOptionsOpen] = useState(false)
   const [armedAlignmentReset, setArmedAlignmentReset] = useState<AlignmentResetTarget>(null)
+  const [preBaselineJustify, setPreBaselineJustify] = useState<string | null>(null)
+  const [preBaselineContent, setPreBaselineContent] = useState<string | null>(null)
+  const [alignmentDisplayMode, setAlignmentDisplayMode] = useState<'all' | 'self'>('all')
   const backgroundPickerRef = useRef<HTMLDivElement | null>(null)
   const [isBorderPickerOpen, setIsBorderPickerOpen] = useState(false)
   const [borderPickerMode, setBorderPickerMode] = useState<BackgroundPickerMode>('hex')
@@ -1388,6 +1483,7 @@ export function StyleEditor({
   const borderPickerRef = useRef<HTMLDivElement | null>(null)
   const wrapOptionsRef = useRef<HTMLDivElement | null>(null)
   const loadedFileNamesRef = useRef(new Set<string>())
+  const saveMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
 
   const breadcrumb = getBreadcrumb(selectedComponent, components)
@@ -1426,8 +1522,6 @@ export function StyleEditor({
       ),
     [classTokens]
   )
-  const widthMode = guessSizeMode(classTokens, 'w')
-  const heightMode = guessSizeMode(classTokens, 'h')
   const fixedWidthPxValue = getFixedSizePxValue(classTokens, 'w')
   const fixedHeightPxValue = getFixedSizePxValue(classTokens, 'h')
   const measuredWidthValue = formatMeasuredSizeValue(selectedComponentSize?.width)
@@ -1435,6 +1529,7 @@ export function StyleEditor({
   const directionMode = guessDirection(classTokens)
   const isFlex = guessToggle(classTokens, 'flex')
   const wrapMode = guessWrap(classTokens)
+
   const flexDirectionOptionGroup =
     directionMode === 'col' || directionMode === 'col-reverse' ? 'col' : 'row'
   const canUseAlignContent = isFlex && directionMode !== 'grid' && wrapMode !== 'flex-nowrap'
@@ -1442,12 +1537,10 @@ export function StyleEditor({
   const gapClass = findToken(classTokens, /^gap-(?![xy]-).+/)
   const gapXClass = findToken(classTokens, /^gap-x-.+/)
   const gapYClass = findToken(classTokens, /^gap-y-.+/)
-  const universalGapValue = getGapValue(gapClass)
   const gapXValue = getGapValue(gapXClass, 'x') || getGapValue(gapClass)
   const gapYValue = getGapValue(gapYClass, 'y') || getGapValue(gapClass)
   const isGapXFallback = !gapXClass && Boolean(gapClass)
   const isGapYFallback = !gapYClass && Boolean(gapClass)
-  const gapMode = gapModeOverride ?? (gapXClass || gapYClass ? 'axes' : 'universal')
   const alignmentState = getAlignmentState(classTokens, directionMode, wrapMode)
   const flexValueClass = findToken(classTokens, /^flex-(1|auto|initial|none)$/)
   const contentClass = findToken(classTokens, /^content-.+$/)
@@ -1474,7 +1567,7 @@ export function StyleEditor({
       : ''
   const isJustifyBaselineActive = alignmentState.justify === 'baseline'
   const isJustifyOverrideActive = Boolean(justifyOverrideValue) || isJustifyBaselineActive
-  const isContentOverrideActive = Boolean(contentSelectValue) || isContentBaselineActive
+  const isContentOverrideActive = (Boolean(contentSelectValue) && contentSelectValue !== 'content-normal') || isContentBaselineActive
   const hasAlignmentResetConflict = isJustifyOverrideActive || isContentOverrideActive
   const isColumnDirectionMode = directionMode === 'col' || directionMode === 'col-reverse'
   const mainAxisLabel = isColumnDirectionMode ? 'Y Axis' : 'X Axis'
@@ -1485,10 +1578,30 @@ export function StyleEditor({
   const selectedParentDirectionMode = selectedParentIsGrid ? 'grid' : guessDirection(selectedParentClassTokens)
   const isColumnItemParent =
     selectedParentDirectionMode === 'col' || selectedParentDirectionMode === 'col-reverse'
+  const isParentFlexMainAxis = (axis: SizeAxis) =>
+    itemLayoutMode === 'flex' && (isColumnItemParent ? axis === 'h' : axis === 'w')
+  const widthMode: SizeMode = itemLayoutMode === 'flex' && flexValueClass === 'flex-1'
+    ? (isColumnItemParent ? guessSizeMode(classTokens.filter(t => t !== 'flex-1'), 'w') : 'Fill')
+    : guessSizeMode(classTokens, 'w')
+  const heightMode: SizeMode = itemLayoutMode === 'flex' && flexValueClass === 'flex-1'
+    ? (isColumnItemParent ? 'Fill' : guessSizeMode(classTokens, 'h'))
+    : guessSizeMode(classTokens, 'h')
+  const parentWrapMode = guessWrap(selectedParentClassTokens)
+  const isParentWrapping = selectedParentIsFlex && parentWrapMode !== '' && parentWrapMode !== 'flex-nowrap'
   const itemMainAxisLabel = isColumnItemParent ? 'Y Axis' : 'X Axis'
   const itemCrossAxisLabel = isColumnItemParent ? 'X Axis' : 'Y Axis'
   const itemAlignSelfAxisLabel = itemLayoutMode === 'grid' ? 'Y Axis' : itemCrossAxisLabel
   const itemOrderAxisLabel = itemLayoutMode === 'grid' ? 'Placement' : itemMainAxisLabel
+  const childrenWithSelfAlignment = useMemo(() => {
+    if (!selectedGroup || selectedComponent !== selectedGroup.name) return 0
+    return selectedGroup.children.filter((child: string) =>
+      toClassTokens(styles[child]).some((token) => /^self-(auto|start|end|center|stretch|baseline)$/.test(token))
+    ).length
+  }, [selectedGroup, selectedComponent, styles])
+  const showAlignmentToggle = isFlex && Boolean(itemLayoutMode)
+  const effectiveAlignmentMode: 'all' | 'self' = showAlignmentToggle
+    ? alignmentDisplayMode
+    : isFlex ? 'all' : 'self'
   const isFixedFlexSizeAxis = (axis: SizeAxis) => {
     const isOwnFlexMainAxis = isFlex && directionMode !== 'grid' && (isColumnDirectionMode ? axis === 'h' : axis === 'w')
     const isParentFlexMainAxis = itemLayoutMode === 'flex' && (isColumnItemParent ? axis === 'h' : axis === 'w')
@@ -1502,7 +1615,7 @@ export function StyleEditor({
   const hasFixedParentFlexMainSize =
     itemLayoutMode === 'flex' && Boolean(isColumnItemParent ? fixedHeightPxValue : fixedWidthPxValue)
   const hasFixedFlexMainSize = hasFixedOwnFlexMainSize || hasFixedParentFlexMainSize
-  const flexValueSelectValue = hasFixedParentFlexMainSize ? 'flex-none' : flexValueClass
+
   const mainAxisDistributionLabel = `${mainAxisLabel} Gaps Distribution`
   const crossAxisDistributionLabel = `${crossAxisLabel} Gaps Distribution`
   const itemDistributionLabel = `${mainAxisLabel.toLowerCase()} gaps`
@@ -1529,6 +1642,7 @@ export function StyleEditor({
     focusedGapAxis !== 'y' &&
     justifyOverrideAxis === 'y' &&
     Boolean(gapYValue.trim())
+  const showGapCrossAxis = directionMode === 'grid' || !isFlex || wrapMode !== 'flex-nowrap'
   const backgroundClass = findToken(classTokens, /^bg-(?!clip-padding$).+/)
   const backgroundDetails = parseBackgroundToken(backgroundClass)
   const backgroundPreviewColor = resolveTailwindColorValue(backgroundDetails.colorValue)
@@ -1749,7 +1863,7 @@ export function StyleEditor({
 
   useEffect(() => {
     setPaddingModeOverride(null)
-    setGapModeOverride(null)
+
     setCornerRadiusModeOverride(null)
     setVisibleLimitFields({
       'width-min': false,
@@ -1763,6 +1877,7 @@ export function StyleEditor({
     setIsAxisOptionsOpen(false)
     setIsWrapOptionsOpen(false)
     setArmedAlignmentReset(null)
+    setAlignmentDisplayMode('all')
   }, [selectedComponent])
 
   useEffect(() => {
@@ -2153,11 +2268,35 @@ export function StyleEditor({
     updateSelectedStyle(nextTokens)
   }
 
+  const applyToChildren = (transform: (tokens: string[]) => string[]) => {
+    if (!selectedFileName || !selectedGroup) return
+    setStylesByFile((prev) => {
+      const fileStyles = { ...(prev[selectedFileName] ?? {}) }
+      let changed = false
+      for (const child of selectedGroup.children) {
+        const childTokens = toClassTokens(fileStyles[child] ?? '')
+        const nextTokens = transform(childTokens)
+        if (nextTokens.some((t, i) => t !== childTokens[i]) || nextTokens.length !== childTokens.length) {
+          fileStyles[child] = fromClassTokens(nextTokens, fileStyles[child])
+          changed = true
+        }
+      }
+      return changed ? { ...prev, [selectedFileName]: fileStyles } : prev
+    })
+  }
+
   const handleFlexToggle = () => {
-    const nextTokens = isFlex
+    const turningOff = isFlex
+    const nextTokens = turningOff
       ? classTokens.filter((token) => token !== 'flex' && token !== 'flex-row' && token !== 'flex-col')
       : [...classTokens, 'flex', directionMode === 'col' ? 'flex-col' : 'flex-row']
     updateSelectedStyle(nextTokens)
+
+    if (turningOff) {
+      applyToChildren((tokens) => translateChildTokensOnFlexOff(tokens, isColumnDirectionMode))
+    } else {
+      applyToChildren((tokens) => translateChildTokensOnFlexOn(tokens, isColumnDirectionMode))
+    }
   }
 
   const handleClipContentToggle = () => {
@@ -2178,6 +2317,7 @@ export function StyleEditor({
           .filter((token) => !/^(flex|flex-row|flex-row-reverse|flex-col|flex-col-reverse|flex-nowrap|flex-wrap|flex-wrap-reverse|grid)$/.test(token))
           .concat('grid')
       )
+      applyToChildren(translateChildTokensOnSwitchToGrid)
       return
     }
 
@@ -2216,25 +2356,22 @@ export function StyleEditor({
     updateSelectedStyle(replaceTokens(classTokens, new RegExp(`^gap-${axis}-.+$`), nextToken ? [nextToken] : []))
   }
 
-  const handleUniversalGapChange = (nextValue: string) => {
-    const nextToken = buildGapToken(nextValue)
-    updateSelectedStyle(replaceTokens(classTokens, /^gap(?:-[xy])?-.+$/, nextToken ? [nextToken] : []))
-  }
 
-  const handleGapModeChange = (nextMode: GapMode) => {
-    if (nextMode === gapMode) return
-    setGapModeOverride(nextMode)
-  }
 
   const handleAlignmentMatrixChange = (nextValue: AlignmentMatrixValue) => {
-    if (hasAlignmentResetConflict && armedAlignmentReset !== nextValue) {
+    const isMidRowContentOnly =
+      isContentOverrideActive &&
+      !isJustifyOverrideActive &&
+      (isColumnDirectionMode ? nextValue.endsWith('-middle') : nextValue.startsWith('middle-'))
+
+    if (hasAlignmentResetConflict && !isMidRowContentOnly && armedAlignmentReset !== nextValue) {
       setArmedAlignmentReset(nextValue)
       return
     }
 
     setArmedAlignmentReset(null)
     const shouldResetJustify = hasAlignmentResetConflict && isJustifyOverrideActive
-    const shouldResetContent = hasAlignmentResetConflict && isContentOverrideActive
+    const shouldResetContent = hasAlignmentResetConflict && isContentOverrideActive && !isMidRowContentOnly
     const nextTokens = classTokens.filter(
       (token) =>
         !(
@@ -2266,7 +2403,21 @@ export function StyleEditor({
     const justifyToken = `justify-${alignmentTokens.justify}`
     const contentToken = `content-${alignmentTokens.content}`
 
-    updateSelectedStyle([...nextTokens, justifyToken, itemsToken, contentToken])
+    updateSelectedStyle([...nextTokens, justifyToken, itemsToken, ...(canUseAlignContent ? [contentToken] : [])])
+
+    if (selectedFileName && selectedGroup) {
+      setStylesByFile((prev) => {
+        const fileStyles = { ...(prev[selectedFileName] ?? {}) }
+        for (const child of selectedGroup.children) {
+          const childTokens = toClassTokens(fileStyles[child])
+          const cleared = childTokens.filter((t) => !/^self-(auto|start|end|center|stretch|baseline)$/.test(t))
+          if (cleared.length !== childTokens.length) {
+            fileStyles[child] = fromClassTokens(cleared, fileStyles[child])
+          }
+        }
+        return { ...prev, [selectedFileName]: fileStyles }
+      })
+    }
   }
 
   const handleJustifyChange = (nextValue: string) => {
@@ -2282,20 +2433,46 @@ export function StyleEditor({
 
   const handleJustifyBaselineToggle = () => {
     setArmedAlignmentReset(null)
-    updateSelectedStyle(
-      replaceTokens(
-        classTokens,
-        /^justify-(start|center|end|between|around|evenly|baseline|normal|stretch)$/,
-        isJustifyBaselineActive ? [] : ['justify-baseline']
+    if (isJustifyBaselineActive) {
+      const restore = preBaselineJustify
+      setPreBaselineJustify(null)
+      updateSelectedStyle(
+        replaceTokens(
+          classTokens,
+          /^justify-(start|center|end|between|around|evenly|baseline|normal|stretch)$/,
+          restore ? [restore] : []
+        )
       )
-    )
+    } else {
+      setPreBaselineJustify(
+        findToken(classTokens, /^justify-(start|center|end|between|around|evenly|normal|stretch)$/) ?? null
+      )
+      updateSelectedStyle(
+        replaceTokens(
+          classTokens,
+          /^justify-(start|center|end|between|around|evenly|baseline|normal|stretch)$/,
+          ['justify-baseline']
+        )
+      )
+    }
   }
 
   const handleContentBaselineToggle = () => {
     setArmedAlignmentReset(null)
-    updateSelectedStyle(
-      replaceTokens(classTokens, /^content-.+$/, isContentBaselineActive ? [] : ['content-baseline'])
-    )
+    if (isContentBaselineActive) {
+      const restore = preBaselineContent
+      setPreBaselineContent(null)
+      updateSelectedStyle(
+        replaceTokens(classTokens, /^content-.+$/, restore ? [restore] : [])
+      )
+    } else {
+      setPreBaselineContent(
+        findToken(classTokens, /^content-(normal|between|around|evenly|stretch)$/) ?? null
+      )
+      updateSelectedStyle(
+        replaceTokens(classTokens, /^content-.+$/, ['content-baseline'])
+      )
+    }
   }
 
   const handleAdvancedFlexTokenChange = (pattern: RegExp, nextValue: string) => {
@@ -2304,16 +2481,21 @@ export function StyleEditor({
   }
 
   const handleSizeModeChange = (axis: SizeAxis, mode: SizeMode) => {
-    const pattern = sizeTokenPattern(axis)
-    let nextValue = ''
-
-    if (mode === 'Fill') {
-      nextValue = axis === 'w' ? 'w-full' : 'h-full'
-    } else if (mode === 'Hug') {
-      nextValue = axis === 'w' ? 'w-fit' : 'h-fit'
+    if (isParentFlexMainAxis(axis)) {
+      const nextFlexToken = mode === 'Fill' ? 'flex-1' : null
+      const nextSizeToken = mode === 'Hug' ? (axis === 'w' ? 'w-fit' : 'h-fit') : null
+      const axisSizePattern = axis === 'w' ? /^(w-.+|basis-.+)$/ : /^h-.+$/
+      let nextTokens = replaceTokens(classTokens, /^flex-(1|none)$/, nextFlexToken ? [nextFlexToken] : [])
+      nextTokens = replaceTokens(nextTokens, axisSizePattern, nextSizeToken ? [nextSizeToken] : [])
+      updateSelectedStyle(nextTokens)
+      return
     }
 
-    const nextTokens = replaceTokens(classTokens, pattern, nextValue ? [nextValue] : [])
+    let nextValue = ''
+    if (mode === 'Fill') nextValue = axis === 'w' ? 'w-full' : 'h-full'
+    else if (mode === 'Hug') nextValue = axis === 'w' ? 'w-fit' : 'h-fit'
+
+    const nextTokens = replaceTokens(classTokens, sizeTokenPattern(axis), nextValue ? [nextValue] : [])
     updateSelectedStyle(
       isFixedFlexSizeAxis(axis) && flexValueClass === 'flex-none'
         ? replaceTokens(nextTokens, /^flex-(1|auto|initial|none)$/, [])
@@ -2506,11 +2688,20 @@ export function StyleEditor({
   }
 
   const normalizeGapTokensForSave = (tokens: string[]) => {
-    const hasExplicitGapX = tokens.some((token) => /^gap-x-.+$/.test(token))
-    const hasExplicitGapY = tokens.some((token) => /^gap-y-.+$/.test(token))
+    const gapXToken = tokens.find((token) => /^gap-x-.+$/.test(token))
+    const gapYToken = tokens.find((token) => /^gap-y-.+$/.test(token))
 
-    if (hasExplicitGapX && hasExplicitGapY) {
+    if (gapXToken && gapYToken) {
       return tokens.filter((token) => !/^gap-(?![xy]-).+$/.test(token))
+    }
+
+    if (gapXToken || gapYToken) {
+      const axisToken = (gapXToken ?? gapYToken)!
+      const value = axisToken.replace(/^gap-[xy]-/, '')
+      return [
+        ...tokens.filter((token) => !/^gap(?:-[xy])?-.+$/.test(token)),
+        `gap-${value}`,
+      ]
     }
 
     return tokens
@@ -2544,6 +2735,19 @@ export function StyleEditor({
       normalizeGapTokensForSave(normalizePaddingTokensForSave())
     )
 
+    const fileStyles = stylesByFile[selectedFileName] ?? {}
+    const savedFileStyles = savedStylesByFile[selectedFileName] ?? {}
+
+    const stylesToSave: Record<string, StyleValue> = {
+      [selectedComponent]: fromClassTokens(nextTokens, styles[selectedComponent]),
+    }
+    for (const [key, value] of Object.entries(fileStyles)) {
+      if (key === selectedComponent) continue
+      if (styleValueSignature(value) !== styleValueSignature(savedFileStyles[key])) {
+        stylesToSave[key] = value
+      }
+    }
+
     setIsSaving(true)
     setSaveMessage('')
 
@@ -2551,40 +2755,31 @@ export function StyleEditor({
       const response = await fetch('/api/save-styles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: selectedFileName,
-          styles: {
-            [selectedComponent]: fromClassTokens(nextTokens, styles[selectedComponent]),
-          },
-        }),
+        body: JSON.stringify({ fileName: selectedFileName, styles: stylesToSave }),
       })
 
       if (!response.ok) {
         throw new Error('Failed to save styles')
       }
 
-      setStylesByFile((prev) => ({
-        ...prev,
-        [selectedFileName]: {
-          ...(prev[selectedFileName] ?? {}),
-          [selectedComponent]: fromClassTokens(
-            nextTokens,
-            prev[selectedFileName]?.[selectedComponent]
-          ),
-        },
-      }))
-      setSavedStylesByFile((prev) => ({
-        ...prev,
-        [selectedFileName]: {
-          ...(prev[selectedFileName] ?? {}),
-          [selectedComponent]: fromClassTokens(
-            nextTokens,
-            prev[selectedFileName]?.[selectedComponent]
-          ),
-        },
-      }))
+      const reconcile = (prev: StylesByFile): StylesByFile => {
+        const prevFileStyles = prev[selectedFileName] ?? {}
+        const updated = {
+          ...prevFileStyles,
+          [selectedComponent]: fromClassTokens(nextTokens, prevFileStyles[selectedComponent]),
+        }
+        for (const key of Object.keys(stylesToSave)) {
+          if (key !== selectedComponent) updated[key] = stylesToSave[key]
+        }
+        return { ...prev, [selectedFileName]: updated }
+      }
+
+      setStylesByFile(reconcile)
+      setSavedStylesByFile(reconcile)
+
+      if (saveMessageTimeoutRef.current) clearTimeout(saveMessageTimeoutRef.current)
       setSaveMessage(`Saved to ${selectedFileName}.json`)
-      setTimeout(() => setSaveMessage(''), 3000)
+      saveMessageTimeoutRef.current = setTimeout(() => setSaveMessage(''), 3000)
     } catch (error) {
       console.error(error)
       setSaveMessage('Failed to save styles')
@@ -2621,6 +2816,8 @@ export function StyleEditor({
                   mode={widthMode}
                   fixedValue={fixedWidthPxValue}
                   fixedPlaceholder={measuredWidthValue}
+                  disableFill={isParentWrapping && isColumnItemParent}
+                  isFlexMainAxis={isParentFlexMainAxis('w')}
                   onModeChange={handleSizeModeChange}
                   onFixedValueChange={handleFixedSizeValueChange}
                 />
@@ -2631,6 +2828,8 @@ export function StyleEditor({
                   mode={heightMode}
                   fixedValue={fixedHeightPxValue}
                   fixedPlaceholder={measuredHeightValue}
+                  disableFill={isParentWrapping && !isColumnItemParent}
+                  isFlexMainAxis={isParentFlexMainAxis('h')}
                   onModeChange={handleSizeModeChange}
                   onFixedValueChange={handleFixedSizeValueChange}
                 />
@@ -2770,11 +2969,19 @@ export function StyleEditor({
                   )}
                 </div>
               </div>
+              <RawClassTextarea
+                label="Limits & Corners"
+                value={activeRawEditor === 'limits' ? rawClassDrafts.limits : rawCategoryTexts.limits}
+                onChange={(value) => handleRawCategoryChange('limits', value)}
+                onFocus={() => setActiveRawEditor('limits')}
+                onBlur={() => setActiveRawEditor(null)}
+                placeholder="rounded-xl max-w-sm h-fit"
+              />
             </>
           )}
         </section>
 
-        {selectedComponent && (
+        {selectedComponent && selectedGroup && selectedGroup.children.length > 0 && (
           <>
             <section className="space-y-4 border-b border-zinc-200 pb-5">
               <div className="flex items-center gap-3 pt-1">
@@ -2903,28 +3110,20 @@ export function StyleEditor({
 
               <div className="relative space-y-1" ref={wrapOptionsRef}>
                 <div className="space-y-0.5">
-                  <div className="flex items-center gap-1">
-                    <span className={`${tinyLabelClass()} w-1/3 shrink-0`}>Wrap?</span>
-                    <span className="w-6 shrink-0" aria-hidden="true" />
-                    <span className={`${tinyLabelClass()} flex-1 ${canUseAlignContent ? '' : 'invisible'}`}>
-                      {crossAxisLabel} gaps
-                    </span>
-                  </div>
+                  <span className={tinyLabelClass()}>Wrap?</span>
                   <div className={`flex items-center gap-1 ${directionMode === 'grid' ? 'opacity-55' : ''}`}>
-                    <div className="w-1/3 shrink-0">
-                      <button
-                        type="button"
-                        aria-pressed={canUseAlignContent}
-                        disabled={directionMode === 'grid'}
-                        onClick={() => handleWrapChange(canUseAlignContent ? 'flex-nowrap' : 'flex-wrap')}
-                        className={`flex w-full items-center justify-center gap-1 rounded-lg py-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
-                          canUseAlignContent ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
-                        }`}
-                      >
-                        Yes
-                        <WrapModeIcon type={wrapMode === 'flex-wrap-reverse' ? 'wrap-reverse' : 'wrap'} />
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      aria-pressed={canUseAlignContent}
+                      disabled={directionMode === 'grid'}
+                      onClick={() => handleWrapChange(canUseAlignContent ? 'flex-nowrap' : 'flex-wrap')}
+                      className={`flex flex-1 items-center justify-center gap-1 rounded-lg py-2 text-[10px] font-semibold transition disabled:cursor-not-allowed ${
+                        canUseAlignContent ? 'bg-gray-100 text-black' : 'bg-gray-100/55 text-zinc-400'
+                      }`}
+                    >
+                      Yes
+                      <WrapModeIcon type={wrapMode === 'flex-wrap-reverse' ? 'wrap-reverse' : 'wrap'} />
+                    </button>
                     <button
                       type="button"
                       onClick={() => setIsWrapOptionsOpen((prev) => !prev)}
@@ -2941,33 +3140,6 @@ export function StyleEditor({
                     >
                       ...
                     </button>
-                    <div className={`group relative flex-1 ${canUseAlignContent ? '' : 'invisible'}`}>
-                      <div className={`${fieldShellClass()} !h-auto py-2`}>
-                        <select
-                          value={canUseAlignContent ? contentSelectValue : ''}
-                          onChange={(event) =>
-                            handleAdvancedFlexTokenChange(/^content-.+$/, event.target.value)
-                          }
-                          disabled={!canUseAlignContent}
-                          className={`${fieldSelectClass()} ${
-                            contentSelectValue ? 'opacity-100' : 'opacity-40'
-                          } disabled:cursor-not-allowed`}
-                          aria-label={crossAxisDistributionLabel}
-                          title={crossAxisDistributionLabel}
-                        >
-                          {CONTENT_OPTIONS.map((option) => (
-                            <option key={option.label} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      {canUseAlignContent && (
-                        <p className={`${tinyHintClass()} absolute left-0 right-0 top-full pt-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}>
-                          {contentHint}
-                        </p>
-                      )}
-                    </div>
                   </div>
                 </div>
                 {isWrapOptionsOpen && canUseAlignContent && (
@@ -3019,149 +3191,149 @@ export function StyleEditor({
                 )}
               </div>
 
-              <div className="flex items-start gap-3">
-                <div className="min-w-0 flex-1 space-y-1 transition">
-                  <div className="space-y-0.5">
-                    <span className={tinyLabelClass()}>Alignment</span>
-                  </div>
-                  <AlignmentMatrixControl
-                    value={alignmentState.matrixValue as AlignmentMatrixValue | null}
-                    onChange={handleAlignmentMatrixChange}
-                    hasResetConflict={hasAlignmentResetConflict}
-                    armedResetValue={armedAlignmentReset}
-                  />
-                  <p className={tinyHintClass()}>
-                    {armedAlignmentReset
-                      ? alignmentResetHint
-                      : hasAlignmentResetConflict
-                        ? 'Click a muted point to prepare a distribution reset.'
-                        : 'Position items on both axes'}
-                  </p>
-                </div>
-
-                <div className="block min-w-0 flex-1 space-y-3">
-                  <label className="block space-y-1">
-                    <div className="space-y-0.5">
-                      <span className={tinyLabelClass()}>{mainAxisDistributionLabel}</span>
+              <div className="min-w-0 space-y-1 transition">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={tinyLabelClass()}>Alignment</span>
+                  {showAlignmentToggle && (
+                    <div className="grid grid-cols-2 gap-0.5 rounded-lg bg-gray-50 p-0.5">
+                      {(['all', 'self'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setAlignmentDisplayMode(mode)}
+                          className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition ${
+                            effectiveAlignmentMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
+                          }`}
+                        >
+                          {mode === 'all' ? 'All' : 'Self'}
+                        </button>
+                      ))}
                     </div>
+                  )}
+                </div>
+                {effectiveAlignmentMode === 'all' ? (
+                  <>
+                    <AlignmentMatrixControl
+                      value={alignmentState.matrixValue as AlignmentMatrixValue | null}
+                      onChange={handleAlignmentMatrixChange}
+                      hasResetConflict={hasAlignmentResetConflict}
+                      contentOnlyConflict={isContentOverrideActive && !isJustifyOverrideActive}
+                      isColumnDirection={isColumnDirectionMode}
+                      armedResetValue={armedAlignmentReset}
+                    />
+                    <p className={tinyHintClass()}>
+                      {armedAlignmentReset
+                        ? alignmentResetHint
+                        : hasAlignmentResetConflict
+                          ? 'Click a muted point to prepare a distribution reset.'
+                          : childrenWithSelfAlignment > 0
+                            ? `${childrenWithSelfAlignment} ${childrenWithSelfAlignment === 1 ? 'item overrides' : 'items override'} this — clicking will clear them`
+                            : 'Position items on both axes'}
+                    </p>
+                  </>
+                ) : (
+                  <>
                     <div className={fieldShellClass()}>
                       <select
-                        value={justifyOverrideValue ? `justify-${justifyOverrideValue}` : ''}
-                        onChange={(event) => handleJustifyChange(event.target.value)}
-                        className={`${fieldSelectClass()} ${justifyOverrideValue ? 'opacity-100' : 'opacity-40'}`}
-                        aria-label="Justify content"
+                        value={selfClass}
+                        onChange={(event) =>
+                          handleAdvancedFlexTokenChange(/^self-.+$/, event.target.value)
+                        }
+                        className={`${fieldSelectClass()} ${selfClass ? 'opacity-100' : 'opacity-40'}`}
+                        aria-label="Align self"
                       >
-                        {JUSTIFY_OPTIONS.map((option) => (
+                        {SELF_OPTIONS.map((option) => (
                           <option key={option.label} value={option.value}>
                             {option.label}
                           </option>
                         ))}
                       </select>
                     </div>
-                    <p className={tinyHintClass()}>{justifyHint}</p>
-                  </label>
-
-                </div>
+                    <p className={tinyHintClass()}>
+                      Override alignment within {selectedParentName ?? 'parent'}
+                    </p>
+                  </>
+                )}
               </div>
 
               <div className="space-y-1">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <span className={tinyLabelClass()}>Gap</span>
-                    <p className={tinyHintClass()}>Spacing token or px</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-50 p-0.5">
-                    {(['universal', 'axes'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => handleGapModeChange(mode)}
-                        className={`rounded-md px-1.5 py-1 text-[11px] font-semibold transition ${
-                          gapMode === mode ? 'bg-white text-black shadow-sm' : 'text-zinc-500'
-                        }`}
-                      >
-                        {mode === 'universal' ? 'Combined' : 'Axes'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {gapMode === 'universal' ? (
-	                  <label className="block min-w-0 flex-1 space-y-1">
-	                    <div className="space-y-0.5">
-	                      <span className={tinyLabelClass()}>All axes</span>
-	                    </div>
-                    <div className="flex h-6 items-center gap-2 rounded-lg bg-gray-100 px-3">
-                      <input
-                        value={universalGapValue}
-                        onChange={(event) => handleUniversalGapChange(event.target.value)}
-                        className="min-w-0 flex-1 bg-transparent text-[12px] font-medium text-black outline-none placeholder:text-black/40"
-                        placeholder="none"
-                        aria-label="Combined gap"
-                      />
-                    </div>
-                  </label>
-                ) : (
+                <span className={tinyLabelClass()}>Gap</span>
+                <div className="space-y-2">
                   <div className="grid grid-cols-2 gap-3">
-                    <label className={`block min-w-0 flex-1 space-y-1 transition ${!gapXClass ? 'opacity-40' : ''}`}>
-                      <div className="space-y-0.5">
-                        <span className={tinyLabelClass()}>x-axis</span>
-                      </div>
-                      <div className="flex h-6 items-center gap-2 rounded-lg bg-gray-100 px-3">
-                        <input
-                          value={gapXValue}
-                          onChange={(event) => handleGapChange('x', event.target.value)}
-                          onFocus={(event) => {
-                            setFocusedGapAxis('x')
-                            if (isGapXFallback) {
-                              event.currentTarget.select()
-                            }
-                          }}
-                          onBlur={() => setFocusedGapAxis(null)}
-                          className="min-w-0 flex-1 bg-transparent text-[12px] font-medium outline-none text-black"
-                          placeholder="none"
-                          aria-label="Gap x-axis"
-                        />
-                        {showGapXAutoSuffix && (
-                          <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-black/35">
-                            {' + auto'}
-                          </span>
-                        )}
-                        <GapAxisIcon axis="x" />
-                      </div>
-                    </label>
-
-                    <label className="block min-w-0 flex-1 space-y-1">
-                      <div className="space-y-0.5">
-                        <span className={tinyLabelClass()}>y-axis</span>
-                      </div>
-                      <div className="flex h-6 items-center gap-2 rounded-lg bg-gray-100 px-3">
-                        <input
-                          value={gapYValue}
-                          onChange={(event) => handleGapChange('y', event.target.value)}
-                          onFocus={(event) => {
-                            setFocusedGapAxis('y')
-                            if (isGapYFallback) {
-                              event.currentTarget.select()
-                            }
-                          }}
-                          onBlur={() => setFocusedGapAxis(null)}
-                          className={`min-w-0 flex-1 bg-transparent text-[12px] font-medium outline-none ${
-                            isGapYFallback ? 'text-black/40' : 'text-black'
-                          }`}
-                          placeholder="none"
-                          aria-label="Gap y-axis"
-                        />
-                        {showGapYAutoSuffix && (
-                          <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-black/35">
-                            {' + auto'}
-                          </span>
-                        )}
-                        <GapAxisIcon axis="y" />
-                      </div>
-                    </label>
+                    <GapAxisInput
+                      axis={isColumnDirectionMode ? 'y' : 'x'}
+                      value={isColumnDirectionMode ? gapYValue : gapXValue}
+                      onChange={(value) => handleGapChange(isColumnDirectionMode ? 'y' : 'x', value)}
+                      isFallback={isColumnDirectionMode ? isGapYFallback : isGapXFallback}
+                      hasExplicitClass={Boolean((isColumnDirectionMode ? gapYClass : gapXClass) || gapClass)}
+                      showAutoSuffix={isColumnDirectionMode ? showGapYAutoSuffix : showGapXAutoSuffix}
+                      onFocus={() => setFocusedGapAxis(isColumnDirectionMode ? 'y' : 'x')}
+                      onBlur={() => setFocusedGapAxis(null)}
+                    />
+                    {isFlex && directionMode !== 'grid' && (
+                      <label className="block space-y-1">
+                        <span className={tinyLabelClass()}>{mainAxisDistributionLabel}</span>
+                        <div className={fieldShellClass()}>
+                          <select
+                            value={justifyOverrideValue ? `justify-${justifyOverrideValue}` : ''}
+                            onChange={(event) => handleJustifyChange(event.target.value)}
+                            className={`${fieldSelectClass()} ${justifyOverrideValue ? 'opacity-100' : 'opacity-40'}`}
+                            aria-label="Justify content"
+                          >
+                            {JUSTIFY_OPTIONS.map((option) => (
+                              <option key={option.label} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <p className={tinyHintClass()}>{justifyHint}</p>
+                      </label>
+                    )}
                   </div>
-                )}
+
+                  {showGapCrossAxis && (
+                    <div className="space-y-1">
+                      {isFlex && directionMode !== 'grid' && (
+                        <span className={tinyLabelClass()}>Gap if Wrapped</span>
+                      )}
+                      <div className="grid grid-cols-2 gap-3">
+                        <GapAxisInput
+                          axis={isColumnDirectionMode ? 'x' : 'y'}
+                          value={isColumnDirectionMode ? gapXValue : gapYValue}
+                          onChange={(value) => handleGapChange(isColumnDirectionMode ? 'x' : 'y', value)}
+                          isFallback={isColumnDirectionMode ? isGapXFallback : isGapYFallback}
+                          hasExplicitClass={Boolean((isColumnDirectionMode ? gapXClass : gapYClass) || gapClass)}
+                          showAutoSuffix={isColumnDirectionMode ? showGapXAutoSuffix : showGapYAutoSuffix}
+                          onFocus={() => setFocusedGapAxis(isColumnDirectionMode ? 'x' : 'y')}
+                          onBlur={() => setFocusedGapAxis(null)}
+                        />
+                        {canUseAlignContent && (
+                          <label className="block space-y-1">
+                            <span className={tinyLabelClass()}>{crossAxisDistributionLabel}</span>
+                            <div className={fieldShellClass()}>
+                              <select
+                                value={contentSelectValue}
+                                onChange={(event) =>
+                                  handleAdvancedFlexTokenChange(/^content-.+$/, event.target.value)
+                                }
+                                className={`${fieldSelectClass()} ${contentSelectValue ? 'opacity-100' : 'opacity-40'}`}
+                                aria-label={crossAxisDistributionLabel}
+                              >
+                                {CONTENT_OPTIONS.map((option) => (
+                                  <option key={option.label} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <p className={tinyHintClass()}>{contentHint}</p>
+                          </label>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <details open className="rounded-2xl border border-zinc-200 bg-white p-3">
@@ -3223,6 +3395,14 @@ export function StyleEditor({
               </details>
               </>
               )}
+              <RawClassTextarea
+                label="Flex"
+                value={activeRawEditor === 'flex' ? rawClassDrafts.flex : rawCategoryTexts.flex}
+                onChange={(value) => handleRawCategoryChange('flex', value)}
+                onFocus={() => setActiveRawEditor('flex')}
+                onBlur={() => setActiveRawEditor(null)}
+                placeholder="flex items-center justify-between gap-4"
+              />
             </section>
 
             {itemLayoutMode && (
@@ -3239,26 +3419,6 @@ export function StyleEditor({
                 <div className="grid grid-cols-2 gap-3">
                   {itemLayoutMode === 'flex' && (
                     <>
-                      <label className="block space-y-1">
-                        <span className={tinyLabelClass()}>Flex · {itemMainAxisLabel}</span>
-                        <div className={fieldShellClass()}>
-                          <select
-                            value={flexValueSelectValue}
-                            onChange={(event) =>
-                              handleAdvancedFlexTokenChange(/^flex-(1|auto|initial|none)$/, event.target.value)
-                            }
-                            className={`${fieldSelectClass()} ${flexValueSelectValue ? 'opacity-100' : 'opacity-40'}`}
-                            aria-label="Flex value"
-                          >
-                            {FLEX_VALUE_OPTIONS.map((option) => (
-                              <option key={option.label} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </label>
-
                       <label className="block space-y-1">
                         <span className={tinyLabelClass()}>Grow · {itemMainAxisLabel}</span>
                         <div className={fieldShellClass()}>
@@ -3313,26 +3473,6 @@ export function StyleEditor({
                       </label>
                     </>
                   )}
-
-                  <label className="block space-y-1">
-                    <span className={tinyLabelClass()}>Align self · {itemAlignSelfAxisLabel}</span>
-                    <div className={fieldShellClass()}>
-                      <select
-                        value={selfClass}
-                        onChange={(event) =>
-                          handleAdvancedFlexTokenChange(/^self-.+$/, event.target.value)
-                        }
-                        className={`${fieldSelectClass()} ${selfClass ? 'opacity-100' : 'opacity-40'}`}
-                        aria-label="Align self"
-                      >
-                        {SELF_OPTIONS.map((option) => (
-                          <option key={option.label} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </label>
 
                   <label className="block space-y-1">
                     <span className={tinyLabelClass()}>Order · {itemOrderAxisLabel}</span>
@@ -3430,6 +3570,22 @@ export function StyleEditor({
                   )}
                 </div>
               </div>
+              <RawClassTextarea
+                label="Padding"
+                value={activeRawEditor === 'padding' ? rawClassDrafts.padding : rawCategoryTexts.padding}
+                onChange={(value) => handleRawCategoryChange('padding', value)}
+                onFocus={() => setActiveRawEditor('padding')}
+                onBlur={() => setActiveRawEditor(null)}
+                placeholder="px-4 py-2"
+              />
+              <RawClassTextarea
+                label="Margin"
+                value={activeRawEditor === 'margin' ? rawClassDrafts.margin : rawCategoryTexts.margin}
+                onChange={(value) => handleRawCategoryChange('margin', value)}
+                onFocus={() => setActiveRawEditor('margin')}
+                onBlur={() => setActiveRawEditor(null)}
+                placeholder="mt-4 mx-auto"
+              />
             </section>
 
             <section className="space-y-4 border-b border-zinc-200 pb-5">
@@ -3613,6 +3769,14 @@ export function StyleEditor({
                   </button>
                 </div>
               )}
+              <RawClassTextarea
+                label="Background"
+                value={activeRawEditor === 'background' ? rawClassDrafts.background : rawCategoryTexts.background}
+                onChange={(value) => handleRawCategoryChange('background', value)}
+                onFocus={() => setActiveRawEditor('background')}
+                onBlur={() => setActiveRawEditor(null)}
+                placeholder="bg-white from-zinc-50 to-zinc-100"
+              />
             </section>
 
             <section className="space-y-5 border-b border-zinc-200 pb-5">
@@ -3889,6 +4053,14 @@ export function StyleEditor({
                     </div>
                   </div>
                 </div>
+              <RawClassTextarea
+                label="Border"
+                value={activeRawEditor === 'border' ? rawClassDrafts.border : rawCategoryTexts.border}
+                onChange={(value) => handleRawCategoryChange('border', value)}
+                onFocus={() => setActiveRawEditor('border')}
+                onBlur={() => setActiveRawEditor(null)}
+                placeholder="border border-zinc-200 outline-none"
+              />
             </section>
 
             <section className="space-y-5">
@@ -3975,7 +4147,7 @@ export function StyleEditor({
             </section>
 
             <section className="space-y-2 border-t border-zinc-200 pt-5">
-              {RAW_EDITOR_GROUPS.map((group) => {
+              {RAW_EDITOR_GROUPS.filter((group) => ['text', 'effects', 'other'].includes(group.key)).map((group) => {
                 const key = group.key as RawEditorCategory
 
                 return (
